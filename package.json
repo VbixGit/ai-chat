@@ -19,7 +19,7 @@
     "web-vitals": "^2.1.4"
   },
   "scripts": {
-    "start": "webpack serve --mode development --open",
+    "start": "concurrently \"react-scripts start\" \"node server.js\"",
     "build": "webpack --mode production",
     "test": "react-scripts test",
     "eject": "react-scripts eject"
@@ -41,16 +41,5 @@
       "last 1 firefox version",
       "last 1 safari version"
     ]
-  },
-  "devDependencies": {
-    "@babel/core": "^7.28.3",
-    "@babel/preset-env": "^7.28.3",
-    "@babel/preset-react": "^7.27.1",
-    "babel-loader": "^10.0.0",
-    "css-loader": "^7.1.2",
-    "html-webpack-plugin": "^5.6.4",
-    "style-loader": "^4.0.0",
-    "webpack": "^5.101.3",
-    "webpack-cli": "^6.0.1"
   }
 }

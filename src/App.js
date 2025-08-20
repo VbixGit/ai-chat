@@ -32,7 +32,7 @@ function App() {
 
   const fetchAIResponse = async (query, chatHistory) => {
     try {
-      const response = await fetch('http://localhost:8080/api/ask', {
+      const response = await fetch('http://localhost:3001/api/ask', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
