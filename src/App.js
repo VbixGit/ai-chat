@@ -19,24 +19,25 @@ function App() {
     e.preventDefault();
     if (input.trim() === '') return;
 
-    const userMessage = { text: input, sender: 'user' };
-    setMessages((prevMessages) => [...prevMessages, userMessage]);
+    const userMessage = { text: input, sender: 'user', role: 'user' };
+    const newMessages = [...messages, userMessage];
+    setMessages(newMessages);
     setInput('');
     setIsTyping(true);
 
-    const aiResponse = await fetchAIResponse(input);
-    setMessages((prevMessages) => [...prevMessages, { text: aiResponse, sender: 'ai' }]);
+    const aiResponse = await fetchAIResponse(input, newMessages.slice(0, -1)); // Pass chat history
+    setMessages((prevMessages) => [...prevMessages, aiResponse]);
     setIsTyping(false);
   };
 
-  const fetchAIResponse = async (query) => {
+  const fetchAIResponse = async (query, chatHistory) => {
     try {
-      const response = await fetch('http://localhost:3001/api/search', {
+      const response = await fetch('http://localhost:3001/api/ask', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ query }),
+        body: JSON.stringify({ question: query, chatHistory }),
       });
 
       if (!response.ok) {
@@ -44,30 +45,44 @@ function App() {
       }
 
       const data = await response.json();
-      const weaviateData = data.data.Get.YourCollectionName; // Adjust based on your collection name
-
-      if (weaviateData && weaviateData.length > 0) {
-        const relevantContent = weaviateData.map(item => item.content).join('\n\n');
-        return `Based on my knowledge base:\n${relevantContent}`;
-      } else {
-        return "I couldn't find relevant information for that. Please try rephrasing your question.";
-      }
+      return {
+        text: data.answer,
+        sender: 'ai',
+        role: 'assistant',
+        citations: data.citations,
+      };
     } catch (error) {
       console.error("Error fetching from backend:", error);
-      return "There was an error connecting to the knowledge base. Please try again later.";
+      return {
+        text: "There was an error connecting to the knowledge base. Please try again later.",
+        sender: 'ai',
+        role: 'assistant',
+      };
     }
   };
 
   return (
     <div className="App">
+      <div className="chat-header">AI Assistant</div>
       <div className="chat-container">
         <div className="chat-messages">
           {messages.map((msg, index) => (
-            <div
-              key={index}
-              className={`message-bubble ${msg.sender}-message`}
-            >
-              {msg.text}
+            <div key={index} className={`message-bubble ${msg.sender}-message`}>
+              <div className="message-text">{msg.text}</div>
+              {msg.citations && msg.citations.length > 0 && (
+                <div className="citations">
+                  <strong>Sources:</strong>
+                  <ul>
+                    {msg.citations.map((citation) => (
+                      <li key={citation.index}>
+                        <a href={citation.source} target="_blank" rel="noopener noreferrer">
+                          {citation.title}
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
           ))}
           {isTyping && (
