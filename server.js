@@ -103,7 +103,7 @@ async function classifyQuestion(openai, question) {
 async function generateQuestionEmbedding(openai, question) {
   console.log('Step 2: Embedding text using OpenAI...');
   const response = await openai.embeddings.create({
-    model: 'text-embedding-ada-002',
+    model: 'text-embedding-3-small',
     input: question,
   });
   const embedding = response.data[0].embedding;
