@@ -119,7 +119,15 @@ function App() {
       }),
     });
 
+    if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(`OpenAI API error: ${response.status} ${response.statusText} - ${JSON.stringify(errorData)}`);
+    }
+
     const data = await response.json();
+    if (!data.choices || data.choices.length === 0) {
+        throw new Error("Invalid response from OpenAI API: No choices found.");
+    }
     let classification = data.choices[0].message.content.trim();
     if (classification !== "Policy" && classification !== "Resume") {
       console.warn(
@@ -144,7 +152,17 @@ function App() {
         input: question,
       }),
     });
+
+    if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(`OpenAI API error: ${response.status} ${response.statusText} - ${JSON.stringify(errorData)}`);
+    }
+
     const data = await response.json();
+    if (!data.data || data.data.length === 0) {
+        throw new Error("Invalid response from OpenAI API: No embedding data found.");
+    }
+
     const embedding = data.data[0].embedding;
     console.log(
       `Step 3: Embedding data: {*embedding data of length ${embedding.length}*}`
@@ -192,6 +210,11 @@ function App() {
       body: JSON.stringify({ query }),
     });
 
+    if (!response.ok) {
+        const errorData = await response.text();
+        throw new Error(`Weaviate API error: ${response.status} ${response.statusText} - ${errorData}`);
+    }
+
     const result = await response.json();
     if (result.errors) {
       throw new Error(`Weaviate search failed: ${JSON.stringify(result.errors)}`);
@@ -226,7 +249,15 @@ function App() {
       }),
     });
 
+    if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(`OpenAI API error: ${response.status} ${response.statusText} - ${JSON.stringify(errorData)}`);
+    }
+
     const data = await response.json();
+    if (!data.choices || data.choices.length === 0) {
+        throw new Error("Invalid response from OpenAI API: No choices found.");
+    }
     const answer = data.choices[0].message.content.trim();
     console.log(`Step 8: Generated answer: "${answer}"`);
     return answer;
