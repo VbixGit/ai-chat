@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from "react";
-import ReactMarkdown from 'react-markdown';
+import React, { Fragment, useState, useEffect, useRef } from "react";
+import ReactMarkdown from "react-markdown";
 import "./App.css";
 
 const WEAVIATE_ENDPOINT = process.env.REACT_APP_WEAVIATE_ENDPOINT;
