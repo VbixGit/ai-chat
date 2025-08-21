@@ -1,6 +1,9 @@
 import React, { useState, useEffect, useRef } from "react";
 import "./App.css";
 
+const WEAVIATE_ENDPOINT = process.env.REACT_APP_WEAVIATE_ENDPOINT;
+const OPENAI_API_KEY = process.env.REACT_APP_OPENAI_API_KEY;
+
 function App() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
@@ -30,36 +33,204 @@ function App() {
     setIsTyping(false);
   };
 
-  const fetchAIResponse = async (query, chatHistory) => {
+  const fetchAIResponse = async (question, chatHistory) => {
     try {
-      const response = await fetch("http://localhost:3001/api/ask", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ question: query, chatHistory }),
-      });
+      console.log(`Step 1: Get text from user: "${question}"`);
+      const classification = await classifyQuestion(question);
+      const embedding = await generateQuestionEmbedding(question);
+      const docs = await searchWeaviate(embedding, classification);
+      console.log(`Step 6: Using all ${docs.length} documents from Weaviate.`);
 
-      if (!response.ok) {
-        throw new Error("Network response was not ok");
+      if (docs.length === 0) {
+        return {
+          text: "I couldn't find any information matching your question. Please try rephrasing it.",
+          sender: "ai",
+          role: "assistant",
+          citations: [],
+        };
       }
 
-      const data = await response.json();
+      const context = docs
+        .map(
+          (d, i) =>
+            `Document #${i + 1}:\n- Description: ${
+              d.description
+            }\n- Content: ${d.content}\n- Source: ${d.source}\n- Requester: ${
+              d.requesterName
+            } <${d.requesterEmail}>\n- PDF File ID: ${
+              d.pdfFileId
+            }\n- Instance ID: ${d.instanceID}\n- Chunk Index: ${
+              d.chunkIndex
+            }\n- Chunk Count: ${d.chunkCount}\n- Chunk ID: ${
+              d.chunkId
+            }\n- Relevance Score (distance): ${d._additional.distance}`
+        )
+        .join("\n\n---\n\n");
+
+      const answer = await generateAnswer(context, question, chatHistory);
+      const citations = docs.map((d, i) => ({
+        index: i + 1,
+        title: d.description || `Document ${i + 1}`,
+        source: d.source,
+      }));
+
+      const response = { answer, citations };
+      console.log(
+        "Step 9: Returning final response:",
+        JSON.stringify(response, null, 2)
+      );
+
       return {
-        text: data.answer,
+        text: response.answer,
         sender: "ai",
         role: "assistant",
-        citations: data.citations,
+        citations: response.citations,
       };
-    } catch (error) {
-      console.error("Error fetching from backend:", error);
+    } catch (err) {
+      console.error("Error in askQuestion:", err);
+      const errorMessage =
+        err instanceof Error ? err.message : "An unknown error occurred.";
       return {
-        text: "There was an error connecting to the knowledge base. Please try again later.",
+        text: `There was an error connecting to the knowledge base: ${errorMessage}`,
         sender: "ai",
         role: "assistant",
       };
     }
   };
+
+  async function classifyQuestion(question) {
+    console.log("Step 2.1: Classifying question...");
+    const systemPrompt = `You are a helpful AI assistant. Your task is to classify the user's question into one of two categories: "Policy" or "Resume". Respond with only "Policy" or "Resume".`;
+    const userPrompt = `Question: ${question}`;
+
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: "gpt-4o",
+        temperature: 0,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+      }),
+    });
+
+    const data = await response.json();
+    let classification = data.choices[0].message.content.trim();
+    if (classification !== "Policy" && classification !== "Resume") {
+      console.warn(
+        `Unexpected classification result: "${classification}". Defaulting to "Policy".`
+      );
+      classification = "Policy";
+    }
+    console.log(`Step 2.2: Classified question as "${classification}"`);
+    return classification;
+  }
+
+  async function generateQuestionEmbedding(question) {
+    console.log("Step 2: Embedding text using OpenAI...");
+    const response = await fetch("https://api.openai.com/v1/embeddings", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: "text-embedding-3-small",
+        input: question,
+      }),
+    });
+    const data = await response.json();
+    const embedding = data.data[0].embedding;
+    console.log(
+      `Step 3: Embedding data: {*embedding data of length ${embedding.length}*}`
+    );
+    return embedding;
+  }
+
+  async function searchWeaviate(vector, classification) {
+    console.log(
+      `Step 4: Searching Weaviate with the embedding vector for classification: ${classification}...`
+    );
+    const className =
+      classification === "Policy" ? "TestPolicyUpload" : "ApplicantCV";
+    const topK = 5;
+
+    const query = `
+      query {
+        Get {
+          ${className}(
+            nearVector: { vector: ${JSON.stringify(vector)} }
+            limit: ${topK}
+          ) {
+            description
+            instanceID
+            requesterName
+            requesterEmail
+            pdfFileId
+            content
+            chunkIndex
+            chunkCount
+            source
+            chunkId
+            _additional { distance }
+          }
+        }
+      }
+    `;
+
+    const response = await fetch(`${WEAVIATE_ENDPOINT}/v1/graphql`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.REACT_APP_WEAVIATE_API_KEY}`,
+      },
+      body: JSON.stringify({ query }),
+    });
+
+    const result = await response.json();
+    if (result.errors) {
+      throw new Error(`Weaviate search failed: ${JSON.stringify(result.errors)}`);
+    }
+
+    const documents = result.data.Get[className] || [];
+    console.log(`Step 5: Found ${documents.length} documents in Weaviate`);
+    return documents;
+  }
+
+  async function generateAnswer(context, question, chatHistory) {
+    console.log("Step 7: Generating answer with context using OpenAI...");
+    const systemPrompt = `You are a helpful AI assistant. Your task is to answer the user's question based on the provided context and chat history. Synthesize the information from the documents to provide a comprehensive and natural-sounding answer. If the information is not in the context, say that you couldn't find the information. Do not make up information. Maintain a conversational and friendly tone, like a human would. If the user's question is a follow-up to a previous question, use the chat history to understand the context of the conversation.`;
+    const userPrompt = `Question: ${question}\n\nContext:\n${context}`;
+
+    const messages = [
+      { role: "system", content: systemPrompt },
+      ...chatHistory,
+      { role: "user", content: userPrompt },
+    ];
+
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: "gpt-4o",
+        temperature: 0.2,
+        messages: messages,
+      }),
+    });
+
+    const data = await response.json();
+    const answer = data.choices[0].message.content.trim();
+    console.log(`Step 8: Generated answer: "${answer}"`);
+    return answer;
+  }
 
   return (
     <div className="App">
