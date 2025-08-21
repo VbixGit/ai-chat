@@ -68,23 +68,11 @@ function App() {
         .join("\n\n---\n\n");
 
       const answer = await generateAnswer(context, question, chatHistory);
-      const citations = docs.map((d, i) => ({
-        index: i + 1,
-        title: d.description || `Document ${i + 1}`,
-        source: d.source,
-      }));
-
-      const response = { answer, citations };
-      console.log(
-        "Step 9: Returning final response:",
-        JSON.stringify(response, null, 2)
-      );
 
       return {
-        text: response.answer,
+        text: answer,
         sender: "ai",
-        role: "assistant",
-        citations: response.citations,
+        role: "assistant"
       };
     } catch (err) {
       console.error("Error in askQuestion:", err);
@@ -230,9 +218,14 @@ function App() {
     const systemPrompt = `You are a helpful AI assistant. Your task is to answer the user's question based on the provided context and chat history. Synthesize the information from the documents to provide a comprehensive and natural-sounding answer. If the information is not in the context, say that you couldn't find the information. Do not make up information. Maintain a conversational and friendly tone, like a human would. If the user's question is a follow-up to a previous question, use the chat history to understand the context of the conversation.`;
     const userPrompt = `Question: ${question}\n\nContext:\n${context}`;
 
+    const formattedHistory = chatHistory.map(msg => ({
+      role: msg.role,
+      content: msg.text
+    }));
+
     const messages = [
       { role: "system", content: systemPrompt },
-      ...chatHistory,
+      ...formattedHistory,
       { role: "user", content: userPrompt },
     ];
 
@@ -271,24 +264,6 @@ function App() {
           {messages.map((msg, index) => (
             <div key={index} className={`message-bubble ${msg.sender}-message`}>
               <div className="message-text">{msg.text}</div>
-              {msg.citations && msg.citations.length > 0 && (
-                <div className="citations">
-                  <strong>Sources:</strong>
-                  <ul>
-                    {msg.citations.map((citation) => (
-                      <li key={citation.index}>
-                        <a
-                          href={citation.source}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >
-                          {citation.title}
-                        </a>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
             </div>
           ))}
           {isTyping && (
