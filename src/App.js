@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import ReactMarkdown from 'react-markdown';
 import "./App.css";
 
 const WEAVIATE_ENDPOINT = process.env.REACT_APP_WEAVIATE_ENDPOINT;
@@ -36,7 +37,16 @@ function App() {
   const fetchAIResponse = async (question, chatHistory) => {
     try {
       console.log(`Step 1: Get text from user: "${question}"`);
-      const classification = await classifyQuestion(question);
+      const classification = await classifyQuestion(question, chatHistory);
+      
+      if (!classification) {
+        return {
+          text: "I'm sorry, I'm having trouble understanding your request. Could you please rephrase it as a question about company policies or about finding a candidate from a resume?",
+          sender: "ai",
+          role: "assistant"
+        };
+      }
+
       const embedding = await generateQuestionEmbedding(question);
       const docs = await searchWeaviate(embedding, classification);
       console.log(`Step 6: Using all ${docs.length} documents from Weaviate.`);
@@ -46,7 +56,6 @@ function App() {
           text: "I couldn't find any information matching your question. Please try rephrasing it.",
           sender: "ai",
           role: "assistant",
-          citations: [],
         };
       }
 
@@ -86,10 +95,25 @@ function App() {
     }
   };
 
-  async function classifyQuestion(question) {
+  async function classifyQuestion(question, chatHistory) {
     console.log("Step 2.1: Classifying question...");
-    const systemPrompt = `You are a helpful AI assistant. Your task is to classify the user's question into one of two categories: "Policy" or "Resume". Respond with only "Policy" or "Resume".`;
-    const userPrompt = `Question: ${question}`;
+    const systemPrompt = `You are an expert at classifying user questions. Your task is to categorize the user's intent into one of two categories: "Policy" or "Resume".
+
+- "Policy" questions are about company rules, benefits, procedures, and general information. Examples: "How do I claim dental expenses?", "What is the vacation policy?".
+- "Resume" questions are about finding candidates with specific skills or experience. Examples: "Find me a software engineer with Python experience", "Who has accounting skills?".
+
+Analyze the chat history for context, but prioritize the most recent user question. Respond with only the word "Policy" or "Resume".`;
+    
+    const formattedHistory = chatHistory.map(msg => ({
+      role: msg.role,
+      content: msg.text
+    }));
+
+    const messages = [
+      { role: "system", content: systemPrompt },
+      ...formattedHistory,
+      { role: "user", content: `Question: ${question}` },
+    ];
 
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -100,10 +124,7 @@ function App() {
       body: JSON.stringify({
         model: "gpt-4o",
         temperature: 0,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
+        messages: messages,
       }),
     });
 
@@ -117,12 +138,14 @@ function App() {
         throw new Error("Invalid response from OpenAI API: No choices found.");
     }
     let classification = data.choices[0].message.content.trim();
+    
     if (classification !== "Policy" && classification !== "Resume") {
       console.warn(
-        `Unexpected classification result: "${classification}". Defaulting to "Policy".`
+        `Unexpected classification result: "${classification}". Returning null.`
       );
-      classification = "Policy";
+      return null;
     }
+
     console.log(`Step 2.2: Classified question as "${classification}"`);
     return classification;
   }
@@ -215,7 +238,12 @@ function App() {
 
   async function generateAnswer(context, question, chatHistory) {
     console.log("Step 7: Generating answer with context using OpenAI...");
-    const systemPrompt = `You are a helpful AI assistant. Your task is to answer the user's question based on the provided context and chat history. Synthesize the information from the documents to provide a comprehensive and natural-sounding answer. If the information is not in the context, say that you couldn't find the information. Do not make up information. Maintain a conversational and friendly tone, like a human would. If the user's question is a follow-up to a previous question, use the chat history to understand the context of the conversation.`;
+    const systemPrompt = `You are a helpful AI assistant. Your task is to answer the user's question based on the provided context and chat history. 
+    Synthesize the information from the documents to provide a comprehensive and natural-sounding answer. 
+    If the information is not in the context, say that you couldn't find the information. Do not make up information. 
+    Maintain a conversational and friendly tone. 
+    Format your answers using Markdown for readability (bold, italics, lists, etc.).
+    If the user's question is a follow-up to a previous question, use the chat history to understand the context of the conversation.`;
     const userPrompt = `Question: ${question}\n\nContext:\n${context}`;
 
     const formattedHistory = chatHistory.map(msg => ({
@@ -263,7 +291,9 @@ function App() {
         <div className="chat-messages">
           {messages.map((msg, index) => (
             <div key={index} className={`message-bubble ${msg.sender}-message`}>
-              <div className="message-text">{msg.text}</div>
+              <div className="message-text">
+                <ReactMarkdown>{msg.text}</ReactMarkdown>
+              </div>
             </div>
           ))}
           {isTyping && (
@@ -293,6 +323,7 @@ function App() {
               stroke="currentColor"
               strokeWidth="2"
               strokeLinecap="round"
+      
               strokeLinejoin="round"
             >
               <line x1="22" y1="2" x2="11" y2="13"></line>
