@@ -41,7 +41,7 @@ function App() {
       
       if (!classification) {
         return {
-          text: "I'm sorry, I'm having trouble understanding your request. Could you please rephrase it as a question about company policies or about finding a candidate from a resume?",
+          text: "ขออภัยค่ะ ดิฉันสามารถตอบคำถามได้เฉพาะเรื่องที่เกี่ยวกับนโยบายของบริษัทและการค้นหาข้อมูลจากเรซูเม่เท่านั้น กรุณาสอบถามอีกครั้งในขอบเขตดังกล่าวค่ะ",
           sender: "ai",
           role: "assistant"
         };
@@ -97,12 +97,13 @@ function App() {
 
   async function classifyQuestion(question, chatHistory) {
     console.log("Step 2.1: Classifying question...");
-    const systemPrompt = `You are an expert at classifying user questions. Your task is to categorize the user's intent into one of two categories: "Policy" or "Resume".
+    const systemPrompt = `You are a strict question classifier. Your only task is to determine if a user's question is about "Policy" or "Resume". You must not engage in conversation.
 
-- "Policy" questions are about company rules, benefits, procedures, and general information. Examples: "How do I claim dental expenses?", "What is the vacation policy?".
-- "Resume" questions are about finding candidates with specific skills or experience. Examples: "Find me a software engineer with Python experience", "Who has accounting skills?".
+- If the question is about company rules, benefits, procedures, or general company information, respond with only the word: Policy
+- If the question is about finding job candidates, skills, or experience from CVs, respond with only the word: Resume
+- If the question is anything else, including greetings, chit-chat, or any other topic, respond with only the word: None
 
-Analyze the chat history for context, but prioritize the most recent user question. Respond with only the word "Policy" or "Resume".`;
+Analyze the chat history for context, but the most recent user question is the most important. Your response must be a single word: "Policy", "Resume", or "None".`;
     
     const formattedHistory = chatHistory.map(msg => ({
       role: msg.role,
@@ -139,15 +140,13 @@ Analyze the chat history for context, but prioritize the most recent user questi
     }
     let classification = data.choices[0].message.content.trim();
     
-    if (classification !== "Policy" && classification !== "Resume") {
-      console.warn(
-        `Unexpected classification result: "${classification}". Returning null.`
-      );
+    if (classification === "Policy" || classification === "Resume") {
+      console.log(`Step 2.2: Classified question as "${classification}"`);
+      return classification;
+    } else {
+      console.log(`Question classified as out of scope (Result: "${classification}"). Returning null.`);
       return null;
     }
-
-    console.log(`Step 2.2: Classified question as "${classification}"`);
-    return classification;
   }
 
   async function generateQuestionEmbedding(question) {
@@ -318,7 +317,7 @@ Analyze the chat history for context, but prioritize the most recent user questi
               xmlns="http://www.w3.org/2000/svg"
               width="24"
               height="24"
-              viewBox="0 0 24 24"
+              viewBox="0 0 24"
               fill="none"
               stroke="currentColor"
               strokeWidth="2"
