@@ -914,7 +914,7 @@ export function validateOpenAiConfiguration() { ... }
 **Improvements:**
 
 1. ✅ Dynamic system prompts
-2. ✅ Correct embedding model (text-embedding-3-large)
+2. ✅ Correct embedding model (text-embedding-3-small)
 3. ✅ Temperature control
 4. ✅ Configuration validation
 5. ✅ Error handling

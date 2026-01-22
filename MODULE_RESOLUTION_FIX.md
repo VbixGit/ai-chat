@@ -153,7 +153,7 @@ import { getFlowConfig } from "../../config/flows"; // ✅ Correct (up 2 levels)
 ### `lib/services/openai.js`
 
 - Wrapper around OpenAI API for chat completions and embeddings
-- Uses correct embedding model: `text-embedding-3-large` (per spec)
+- Uses correct embedding model: `text-embedding-3-small` (per spec)
 - Builds message array with system prompt, chat history, and context
 
 **Exports:**
@@ -211,7 +211,6 @@ import { getFlowConfig } from "../../config/flows"; // ✅ Correct (up 2 levels)
 ## NEXT STEPS
 
 1. **Integration Points** - 9 marked TODOs in App.js:
-
    - Load system prompt from Kissflow Page variables
    - Integrate Weaviate retrieval
    - Integrate OpenAI chat completion
@@ -220,7 +219,6 @@ import { getFlowConfig } from "../../config/flows"; // ✅ Correct (up 2 levels)
    - Plus 4 more in services
 
 2. **Testing Checklist:**
-
    - ✅ Webpack compiles successfully
    - ⏳ Dev server at http://localhost:8081/
    - ⏳ Test all flow configurations load

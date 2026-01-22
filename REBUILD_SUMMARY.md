@@ -61,7 +61,7 @@ The Kissflow Custom Component has been **completely audited, cleaned, and rebuil
 **Current Issues:**
 
 - Hardcoded Weaviate class `CaseSolutionKnowledgeBase`
-- Wrong embedding model (`text-embedding-3-small` vs spec: `text-embedding-3-large`)
+- Wrong embedding model (`text-embedding-3-small` vs spec: `text-embedding-3-small`)
 - Generates Kissflow case data (not required)
 - No multi-flow support
 - No language detection
@@ -217,7 +217,7 @@ Strict allow-list enforcement:
 
 ```typescript
 ✅ generateChatCompletion() - Dynamic system prompts, chat history
-✅ generateEmbedding() - Uses text-embedding-3-large (per spec)
+✅ generateEmbedding() - Uses text-embedding-3-small (per spec)
 ✅ validateOpenAiConfiguration() - Pre-flight validation
 ```
 
@@ -395,7 +395,7 @@ Kept:
 #### **5. RAG Retrieval** ✅
 
 ```
-- Generate embeddings (text-embedding-3-large) ✅
+- Generate embeddings (text-embedding-3-small) ✅
 - Query Weaviate with flow-based classes ✅
 - Support parallel retrieval ✅
 - Trim context to reasonable size ✅
@@ -560,10 +560,10 @@ Example:
  * DECISION: REFACTOR
  * - Removed hardcoded class name
  * - Made flow-based using getWeaviateClassesForFlow()
- * - Changed embedding model to text-embedding-3-large per spec
+ * - Changed embedding model to text-embedding-3-small per spec
  */
 export async function queryWeaviate(
-  retrieval: RetrievalQuery
+  retrieval: RetrievalQuery,
 ): Promise<RetrievalResult> {
   // Implementation...
 }

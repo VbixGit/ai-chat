@@ -88,7 +88,7 @@ const retrievalResult = await queryWeaviate({
 });
 
 const { context, citations } = formatContextFromDocuments(
-  retrievalResult.documents
+  retrievalResult.documents,
 );
 ```
 
@@ -115,7 +115,7 @@ const { context, citations } = formatContextFromDocuments(
 // In translateToEnglishForRetrieval():
 export async function translateToEnglishForRetrieval(
   text: string,
-  sourceLanguage: string
+  sourceLanguage: string,
 ): Promise<string> {
   if (sourceLanguage === "en") return text;
 
@@ -202,7 +202,7 @@ const leaveData = await queryKissflowDataset(
     filters: { email: userInfo.email },
     limit: 1,
   },
-  userInfo
+  userInfo,
 );
 
 // Include in context:
@@ -263,7 +263,7 @@ const handleCreateKissflowItem = async () => {
 **If keeping server:**
 
 - [ ] Update Weaviate class to be dynamic
-- [ ] Use text-embedding-3-large
+- [ ] Use text-embedding-3-small
 - [ ] Remove Kissflow case generation
 - [ ] Add language detection
 - [ ] Support allow-list for external DBs
@@ -300,7 +300,7 @@ Before deployment, ensure .env is configured:
 # OpenAI ✅
 REACT_APP_OPENAI_API_KEY=sk-...
 REACT_APP_OPENAI_CHAT_MODEL=gpt-4o-mini
-REACT_APP_OPENAI_EMBED_MODEL=text-embedding-3-large
+REACT_APP_OPENAI_EMBED_MODEL=text-embedding-3-small
 
 # Weaviate ✅
 REACT_APP_WEAVIATE_URL=https://...
@@ -401,7 +401,6 @@ After implementation, update:
 4. **Message History:** Limited to in-memory state for Phase 1. Chat will reset on page refresh (as designed). No persistence allowed.
 
 5. **System Prompts:** Must be stored in Kissflow Page variables as:
-
    - `systemPrompt_HR`
    - `systemPrompt_TOR`
    - `systemPrompt_CRM`

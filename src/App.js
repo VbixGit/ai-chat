@@ -68,6 +68,23 @@ function getDefaultSystemPrompt() {
   return "You are a helpful AI assistant, similar to ChatGPT or Gemini. You can answer questions on any topic, provide explanations, help with writing, coding, analysis, and much more. Be helpful, accurate, and concise in your responses.";
 }
 
+// ===== TRANSLATION UTILITY =====
+const translateToEnglish = async (text) => {
+  try {
+    const response = await generateChatCompletion({
+      systemPrompt:
+        "Translate the following text to English. If it's already in English, return it unchanged.",
+      userMessage: text,
+      chatHistory: [],
+      context: "",
+    });
+    return response.content.trim();
+  } catch (error) {
+    console.error("Translation error:", error);
+    return text;
+  }
+};
+
 // ===== MAIN APP COMPONENT =====
 // DECISION: COMPLETE REBUILD - Multi-flow, config-driven, language-aware
 
@@ -118,6 +135,20 @@ function App() {
         // Validate configuration
         validateAllConfig();
 
+        console.log("🔑 Environment variables status:");
+        console.log(
+          "  - OpenAI API Key:",
+          REACT_APP_OPENAI_API_KEY ? "SET" : "NOT SET",
+        );
+        console.log(
+          "  - Weaviate URL:",
+          REACT_APP_WEAVIATE_URL ? "SET" : "NOT SET",
+        );
+        console.log(
+          "  - Weaviate API Key:",
+          REACT_APP_WEAVIATE_API_KEY ? "SET" : "NOT SET",
+        );
+
         // Check if opened in Kissflow or regular browser
         const inKissflow = await isOpenedInKissflow();
         setIsKissflowContext(inKissflow);
@@ -151,7 +182,7 @@ function App() {
             setProcessName(processNameFromPageVars);
             console.log(
               "🏷️ Process name from page variables:",
-              processNameFromPageVars
+              processNameFromPageVars,
             );
 
             // Map process_name to flow
@@ -163,7 +194,7 @@ function App() {
             } else {
               console.warn(
                 "⚠️ Could not map process_name to flow:",
-                processNameFromPageVars
+                processNameFromPageVars,
               );
             }
 
@@ -208,7 +239,9 @@ function App() {
           setSelectedFlow(null);
           setSystemPromptId(null);
           setSystemPrompt(getDefaultSystemPrompt());
-          console.log("ℹ️ Demo mode: Using default system prompt for general chat");
+          console.log(
+            "ℹ️ Demo mode: Using default system prompt for general chat",
+          );
 
           setUserInfoError(null);
         }
@@ -301,7 +334,7 @@ function App() {
       } catch (refreshErr) {
         console.warn(
           "⚠️ [FRESH] Could not refresh Kissflow parameters:",
-          refreshErr.message
+          refreshErr.message,
         );
         // Use current state values
       }
@@ -329,7 +362,7 @@ function App() {
         currentFlow || "DEFAULT",
         currentFlow ? FLOWS[currentFlow].category : "general",
         currentFlow || "DEFAULT",
-        userLanguage
+        userLanguage,
       );
 
       logMessage(userMsg);
@@ -341,7 +374,7 @@ function App() {
         `Processing your message...`,
         currentFlow || "DEFAULT",
         currentFlow ? FLOWS[currentFlow].category : "general",
-        currentFlow || "DEFAULT"
+        currentFlow || "DEFAULT",
       );
       assistantMsgId = assistantMsg.id;
 
@@ -372,7 +405,7 @@ function App() {
             weaviateResult.documents.length > 0
           ) {
             console.log(
-              `✅ Retrieved ${weaviateResult.documents.length} documents from Weaviate`
+              `✅ Retrieved ${weaviateResult.documents.length} documents from Weaviate`,
             );
             context = weaviateResult.formattedContext || "";
             citations = weaviateResult.citations || [];
@@ -425,9 +458,15 @@ function App() {
       if (citations && citations.length > 0) {
         responseContent += "\n\n**References:**\n";
         citations.forEach((cite) => {
-          responseContent += `[${cite.index}] ${
-            cite.title
-          } (Score: ${cite.relevanceScore?.toFixed(3)})\n`;
+          let scoreStr = "-";
+          if (
+            cite.relevanceScore !== undefined &&
+            cite.relevanceScore !== null &&
+            !isNaN(Number(cite.relevanceScore))
+          ) {
+            scoreStr = Number(cite.relevanceScore).toFixed(3);
+          }
+          responseContent += `[${cite.index}] ${cite.title} (Score: ${scoreStr})\n`;
         });
       }
 
@@ -445,8 +484,8 @@ function App() {
                   citations: citations,
                 },
               }
-            : msg
-        )
+            : msg,
+        ),
       );
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : "Unknown error";
@@ -462,8 +501,8 @@ function App() {
                   ...msg,
                   content: `❌ Error: ${errorMsg}`,
                 }
-              : msg
-          )
+              : msg,
+          ),
         );
       }
     } finally {

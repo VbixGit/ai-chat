@@ -91,7 +91,7 @@ export const OPENAI_CONFIG = {
   chatModel: getEnv("REACT_APP_OPENAI_CHAT_MODEL", "gpt-4o-mini"),
   embeddingModel: getEnv(
     "REACT_APP_OPENAI_EMBED_MODEL",
-    "text-embedding-3-large"
+    "text-embedding-3-small",
   ),
   temperature: parseFloat(getEnv("REACT_APP_OPENAI_TEMPERATURE", "0.2")),
   maxTokens: parseInt(getEnv("REACT_APP_OPENAI_MAX_TOKENS", "2048"), 10),
