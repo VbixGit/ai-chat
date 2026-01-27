@@ -273,7 +273,7 @@ export async function getProcessNameFromPageVariables() {
   } catch (error) {
     console.error(
       "❌ Failed to get process name from page variable:",
-      error.message
+      error.message,
     );
     return null;
   }

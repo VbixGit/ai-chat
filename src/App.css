@@ -28,9 +28,9 @@
 
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Oxygen",
-    "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue",
-    sans-serif;
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Oxygen", "Ubuntu",
+    "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   background-color: var(--background-color);
@@ -198,7 +198,9 @@ body {
   padding: 1rem 1.25rem;
   border: 1px solid rgba(0, 0, 0, 0.08);
   font-weight: 500;
-  transition: box-shadow 0.3s ease, transform 0.2s ease;
+  transition:
+    box-shadow 0.3s ease,
+    transform 0.2s ease;
 }
 
 .ai-message:hover {
@@ -686,6 +688,46 @@ body {
 
 .refs-create-new:active {
   transform: translateY(0);
+}
+
+/* ===== Kissflow reference buttons ===== */
+.refs-actions {
+  margin-top: 8px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.open-kissflow-single-btn {
+  padding: 6px 10px;
+  font-size: 0.8rem;
+  background-color: #1976d2;
+  color: white;
+  border: none;
+  border-radius: 0.4rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.open-kissflow-single-btn:hover {
+  background-color: #115293;
+  box-shadow: 0 2px 6px rgba(17, 82, 147, 0.2);
+}
+
+.open-kissflow-all-btn {
+  padding: 8px 12px;
+  font-size: 0.9rem;
+  background-color: var(--user-message-background);
+  color: white;
+  border: none;
+  border-radius: 0.5rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.open-kissflow-all-btn:hover {
+  background-color: #0d9169;
+  box-shadow: 0 2px 6px rgba(16, 163, 127, 0.2);
 }
 
 [data-theme="dark"] .refs-create-new {

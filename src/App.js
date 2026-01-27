@@ -18,7 +18,7 @@ import "./App.css";
 
 // ===== CONFIG & TYPES =====
 import { validateAllConfig } from "./config/env";
-import { FLOWS, listAvailableFlows } from "./config/flows";
+import { FLOWS, listAvailableFlows, getFlowConfig } from "./config/flows";
 
 // ===== SERVICES =====
 import {
@@ -28,6 +28,7 @@ import {
   getSystemPromptFromPageVariables,
   getProcessNameFromPageVariables,
   isOpenedInKissflow,
+  getKissflowSDK,
 } from "./lib/services/kissflow";
 import { generateChatCompletion } from "./lib/services/openai";
 import { queryWeaviate } from "./lib/services/weaviate";
@@ -528,6 +529,25 @@ function App() {
     }
   };
 
+  const openInKissflow = async (instanceIdsArray) => {
+    try {
+      const joined = instanceIdsArray.join(",");
+      const kf = await getKissflowSDK();
+      if (!kf) {
+        throw new Error("Kissflow SDK not initialized");
+      }
+      const flowConfig = currentFlow ? FLOWS[currentFlow] : null;
+      if (!flowConfig || !flowConfig.kfPopupId) {
+        throw new Error("No popup ID configured for current flow");
+      }
+      const popupId = flowConfig.kfPopupId;
+      await kf.app.page.openPopup(popupId, { instanceidreport: joined });
+      console.log(`📝 Opened Kissflow popup for instances: ${joined}`);
+    } catch (error) {
+      console.error("❌ Failed to open Kissflow popup:", error);
+    }
+  };
+
   // ===== RENDER =====
   // DECISION: REBUILD UI with flow selector, system prompt info, task state display
   return (
@@ -632,14 +652,65 @@ function App() {
                   <div className="citations">
                     <strong>Sources:</strong>
                     <ul className="refs-inline-list">
-                      {msg.citations.map((cite, idx) => (
-                        <li key={idx} className="refs-inline-item">
-                          <span className="refs-inline-title">
-                            #{cite.index}: {cite.title}
-                          </span>
-                        </li>
-                      ))}
+                      {msg.citations.map((cite, idx) => {
+                        const displayScore =
+                          cite.score ??
+                          cite._additional?.certainty ??
+                          cite._additional?.score;
+                        return (
+                          <li key={idx} className="refs-inline-item">
+                            <span className="refs-inline-title">
+                              #{cite.index}: {cite.title}
+                              {displayScore
+                                ? ` (${Number(displayScore).toFixed(3)})`
+                                : ""}
+                            </span>
+                            <button
+                              type="button"
+                              className="open-kissflow-single-btn"
+                              onClick={() => {
+                                const id =
+                                  cite.instanceID ||
+                                  cite.instanceId ||
+                                  cite.caseNumber ||
+                                  cite.id ||
+                                  cite._additional?.id;
+                                if (id) openInKissflow([id]);
+                                else
+                                  alert(
+                                    "ไม่พบ instanceID สำหรับ reference นี้",
+                                  );
+                              }}
+                            >
+                              Open
+                            </button>
+                          </li>
+                        );
+                      })}
                     </ul>
+
+                    <div className="refs-actions">
+                      <button
+                        type="button"
+                        className="open-kissflow-all-btn"
+                        onClick={() => {
+                          const ids = msg.citations
+                            .map(
+                              (c) =>
+                                c.instanceID ||
+                                c.instanceId ||
+                                c.caseNumber ||
+                                c.id ||
+                                c._additional?.id,
+                            )
+                            .filter(Boolean);
+                          if (ids.length) openInKissflow(ids);
+                          else alert("ไม่พบ instanceID สำหรับเปิดทั้งหมด");
+                        }}
+                      >
+                        Open All
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
@@ -727,6 +798,42 @@ class ErrorBoundary extends React.Component {
     console.error("🔴 React Error Caught:", error);
     console.error("Error Info:", errorInfo);
   }
+
+  openInKissflow = async (instanceIdsArray) => {
+    const ids = (instanceIdsArray || [])
+
+      .map((s) => (s || "").trim())
+
+      .filter(Boolean);
+
+    if (!ids.length) {
+      alert("ไม่พบ instanceID สำหรับส่งไป Kissflow");
+
+      return;
+    }
+
+    const joined = ids.join(",");
+
+    const kf = await getKf();
+
+    if (!kf) {
+      alert(
+        "ไม่สามารถเชื่อมต่อ Kissflow SDK ได้ (ต้องเปิดจาก Custom Page ภายใน Kissflow)",
+      );
+
+      return;
+    }
+
+    try {
+      console.log("instanceidreport:", joined);
+
+      await kf.app.page.openPopup(KF_POPUP_ID, { instanceidreport: joined });
+    } catch (err) {
+      console.error("Open popup failed:", err);
+
+      alert("เปิด popup ไม่สำเร็จ: " + (err?.message || "unknown error"));
+    }
+  };
 
   render() {
     if (this.state.hasError) {

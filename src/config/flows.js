@@ -27,6 +27,7 @@ export const FLOWS = {
     actionsAllowed: ["ANSWER_ONLY"],
     requiresSystemPrompt: true,
     responseLanguage: "user-detected",
+    kfPopupId: "Popup_XMI7PvxAKV",
     suggestedQuestions: [
       "What is our company vacation policy?",
       "How many sick days do employees get?",
@@ -58,6 +59,7 @@ export const FLOWS = {
     actionsAllowed: ["ANSWER_ONLY"],
     requiresSystemPrompt: true,
     responseLanguage: "user-detected",
+    kfPopupId: "Popup_tbzFztWnwg",
     suggestedQuestions: [
       "What are the project deliverables?",
       "What is the project timeline?",
@@ -102,7 +104,7 @@ export const FLOWS = {
 - If no similar cases → hasSimilarCase = false, solution = "ยังไม่เคยพบเคสนี้ ไม่สามารถให้คำตอบได้"
 - Never start with: "พบเคสที่คล้ายกัน", "จากข้อมูลใน KB", "อ้างอิงจากเคส"
 - Output MUST be valid JSON immediately`,
-    kfPopupId: "Popup_kMvLNHW_ys",
+    kfPopupId: "Popup_zZXcYR3X1n",
     caseSolutionSchema: {
       title: "CaseSolutionResponse",
       type: "object",
@@ -151,7 +153,7 @@ export const FLOWS = {
       Solution_Description: "Solution_Description",
       Requester_Email: "Requester_Email",
     },
-    kfPopupId: "Popup_ifoiwDki9p",
+    kfPopupId: "Popup_gA1rZXfeUN",
     actionsAllowed: ["ANSWER_ONLY", "CREATE", "READ", "QUERY"],
     requiresSystemPrompt: true,
     responseLanguage: "user-detected",
