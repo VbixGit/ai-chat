@@ -13,6 +13,7 @@ import {
   getTranslateQueryToThaiForFlow,
 } from "../../config/flows";
 import { generateEmbedding, translateToThai } from "./openai";
+import { debug, debugJson } from "../utils/debug";
 
 export async function queryWeaviate(retrieval) {
   const {
@@ -28,6 +29,7 @@ export async function queryWeaviate(retrieval) {
 
   try {
     console.log(`🔍 Querying Weaviate for ${flowKey} flow...`);
+    debug("queryWeaviate params:", { flowKey, query, limit, scoreThreshold });
 
     // Translate query to Thai if required for this flow
     const shouldTranslate = getTranslateQueryToThaiForFlow(flowKey);
@@ -36,6 +38,7 @@ export async function queryWeaviate(retrieval) {
     // Get embedding for query
     const embeddingResult = await generateEmbedding({ text: queryToEmbed });
     const embedding = embeddingResult.embedding;
+    debugJson("embeddingResult", { length: embedding?.length || 0 });
 
     // Get Weaviate class for this flow
     const classes = getWeaviateClassesForFlow(flowKey);
@@ -53,8 +56,9 @@ export async function queryWeaviate(retrieval) {
       className,
       embedding,
       limit,
-      fields
+      fields,
     );
+    debug("GraphQL query (truncated):", graphqlQuery.substring(0, 1000));
 
     // Execute query
     const response = await fetch(`${WEAVIATE_CONFIG.url}/v1/graphql`, {
@@ -70,15 +74,21 @@ export async function queryWeaviate(retrieval) {
       },
       body: JSON.stringify({ query: graphqlQuery }),
     });
-
+    debug("Weaviate HTTP status:", response.status, response.statusText);
     if (!response.ok) {
+      const bodyText = await response.text().catch(() => "<no-body>");
+      debug(
+        "Weaviate error body:",
+        bodyText.substring ? bodyText.substring(0, 2000) : bodyText,
+      );
       throw new Error(`Weaviate query failed: ${response.statusText}`);
     }
 
     const data = await response.json();
+    debugJson("weaviate.rawResponse", data);
     const documents = processWeaviateResults(data, scoreThreshold, className);
     const formatted = formatContextFromDocuments(documents);
-
+    debugJson("weaviate.documents", documents.slice(0, 10));
     console.log(`✅ Retrieved ${documents.length} documents from Weaviate`);
 
     return {
@@ -89,6 +99,10 @@ export async function queryWeaviate(retrieval) {
     };
   } catch (error) {
     console.error("❌ Weaviate query failed:", error);
+    debugJson("weaviate.error", {
+      message: error?.message,
+      stack: error?.stack,
+    });
     throw error;
   }
 }
@@ -143,10 +157,19 @@ function processWeaviateResults(data, scoreThreshold, className) {
     return results
       .filter((item) => item._additional?.score >= scoreThreshold)
       .map((item, idx) => ({
-        id: item.instanceID || `doc_${idx}`,
+        id:
+          item.instanceID ||
+          item._additional?.id ||
+          item.gdriveFileId ||
+          `doc_${idx}`,
         content: item.documentDetail || "",
         title: item.documentTopic || "Untitled",
         metadata: {
+          instanceID:
+            item.instanceID ||
+            item._additional?.id ||
+            item.gdriveFileId ||
+            null,
           description: item.documentDescription,
           page: item.documentPage,
           pageStart: item.documentPageStart,
@@ -191,11 +214,16 @@ function formatContextFromDocuments(documents) {
   const citations = [];
   const context = documents
     .map((doc, idx) => {
+      // Include instanceID/id so UI can open Kissflow popups
+      const instanceId =
+        doc.id || doc.metadata?.instanceID || doc.metadata?.caseNumber || null;
       citations.push({
         index: idx + 1,
         title: doc.title,
         source: "Weaviate",
         relevanceScore: doc.score,
+        instanceID: instanceId,
+        id: instanceId,
       });
       return `[${idx + 1}] ${doc.content.substring(0, 500)}...`;
     })

@@ -33,6 +33,7 @@ import {
 } from "./lib/services/kissflow";
 import { generateChatCompletion } from "./lib/services/openai";
 import { queryWeaviate } from "./lib/services/weaviate";
+import { debug, debugJson, setDebug } from "./lib/utils/debug";
 import {
   detectLanguage,
   getLanguageName,
@@ -391,6 +392,7 @@ function App() {
       // Step 5: Query Weaviate for context
       console.log("🔍 Querying Weaviate for context...");
       console.log("📋 Using flow for Weaviate query:", currentFlow);
+      debug("Weaviate query start", { flow: currentFlow, userInput });
       const flowConfig = currentFlow ? FLOWS[currentFlow] : null;
 
       let context = "";
@@ -401,11 +403,13 @@ function App() {
         flowConfig.weaviateClasses.length > 0
       ) {
         try {
+          // optional: enable debug output by calling setDebug(true) in the console
           const weaviateResult = await queryWeaviate({
             flowKey: currentFlow,
             query: userInput,
             limit: 5,
           });
+          debugJson("weaviateResult", weaviateResult);
           if (
             weaviateResult &&
             weaviateResult.documents &&
@@ -460,22 +464,8 @@ function App() {
 
       console.log("✅ OpenAI response received");
 
-      // Step 9: Format response with citations if available
+      // Step 9: Keep response content clean — citations are rendered by the CitationList UI
       let responseContent = response.content;
-      if (citations && citations.length > 0) {
-        responseContent += "\n\n**References:**\n";
-        citations.forEach((cite) => {
-          let scoreStr = "-";
-          if (
-            cite.relevanceScore !== undefined &&
-            cite.relevanceScore !== null &&
-            !isNaN(Number(cite.relevanceScore))
-          ) {
-            scoreStr = Number(cite.relevanceScore).toFixed(3);
-          }
-          responseContent += `[${cite.index}] ${cite.title} (Score: ${scoreStr})\n`;
-        });
-      }
 
       // Step 10: Update assistant message with actual response
       setMessages((prev) =>
@@ -490,6 +480,8 @@ function App() {
                   model: response.model || "gpt-3.5-turbo",
                   citations: citations,
                 },
+                // keep top-level citations for older components that look there
+                citations: citations,
               }
             : msg,
         ),
@@ -660,11 +652,20 @@ function App() {
                 <div className="message-text">
                   <ReactMarkdown>{msg.content}</ReactMarkdown>
                 </div>
-                {msg.citations && msg.citations.length > 0 && (
+                {((msg.citations && msg.citations.length > 0) ||
+                  (msg.knowledgeBase && msg.knowledgeBase.length > 0) ||
+                  (msg.hrResponse &&
+                    msg.hrResponse.referenceDocuments &&
+                    msg.hrResponse.referenceDocuments.length > 0)) && (
                   <div className="citations">
                     <strong>Sources:</strong>
                     <CitationList
-                      citations={msg.citations}
+                      citations={
+                        msg.citations ||
+                        msg.knowledgeBase ||
+                        (msg.hrResponse && msg.hrResponse.referenceDocuments) ||
+                        []
+                      }
                       onOpenOne={async (ids) => {
                         if (!ids || !ids.length) {
                           alert("ไม่พบ instanceID สำหรับ reference นี้");

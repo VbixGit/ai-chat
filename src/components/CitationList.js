@@ -10,7 +10,18 @@ export default function CitationList({
   const [confirmMessage, setConfirmMessage] = useState("");
 
   const idFor = (c) =>
-    c.instanceID || c.instanceId || c.caseNumber || c.id || c._additional?.id;
+    c.instanceID ||
+    c.instanceId ||
+    c.properties?.instanceID ||
+    c.properties?.instanceId ||
+    c.caseNumber ||
+    c.id ||
+    c.docId ||
+    c.documentId ||
+    c.referenceId ||
+    c._additional?.id ||
+    c._additional?.properties?.instanceID ||
+    c._additional?.properties?.instanceId;
 
   const beginConfirm = (ids, message) => {
     setConfirmIds(ids || []);
@@ -46,12 +57,13 @@ export default function CitationList({
           className="refs-open-all"
           onClick={() => {
             const ids = citations.map(idFor).filter(Boolean);
-            if (!ids.length) return alert("ไม่พบ instanceID สำหรับเปิดทั้งหมด");
+            if (!ids.length) return;
             beginConfirm(ids, `Open ${ids.length} items in Kissflow?`);
           }}
-          aria-label={`Open all ${citations.length} documents in Kissflow`}
+          aria-label={`Open all documents in Kissflow`}
+          disabled={citations.map(idFor).filter(Boolean).length === 0}
         >
-          Open all ({citations.length})
+          Open all ({citations.map(idFor).filter(Boolean).length})
         </button>
       </div>
 
@@ -104,18 +116,23 @@ export default function CitationList({
                     : ""}
                 </div>
               </div>
-              <button
-                type="button"
-                className="refs-open-one"
-                onClick={() => {
-                  if (!id)
-                    return alert("ไม่พบ instanceID สำหรับ reference นี้");
-                  beginConfirm([id], "Open selected reference(s) in Kissflow?");
-                }}
-                aria-label={`Open document ${i + 1} in Kissflow`}
-              >
-                Open
-              </button>
+              {id ? (
+                <button
+                  type="button"
+                  className="refs-open-one"
+                  onClick={() =>
+                    beginConfirm(
+                      [id],
+                      "Open selected reference(s) in Kissflow?",
+                    )
+                  }
+                  aria-label={`Open document ${i + 1} in Kissflow`}
+                >
+                  Open
+                </button>
+              ) : (
+                <span className="refs-no-id">No instanceID</span>
+              )}
             </li>
           );
         })}
