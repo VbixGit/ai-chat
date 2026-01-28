@@ -30,6 +30,7 @@ import {
   isOpenedInKissflow,
   getKissflowSDK,
   openKissflowPopup,
+  createKissflowItem,
 } from "./lib/services/kissflow";
 import { generateChatCompletion } from "./lib/services/openai";
 import { queryWeaviate } from "./lib/services/weaviate";
@@ -129,6 +130,7 @@ function App() {
   // DECISION: ADD - Loading and error states
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [createdItemData, setCreatedItemData] = useState(null);
 
   // No global modal: inline confirmation is handled within CitationList
 
@@ -479,6 +481,10 @@ function App() {
                   tokens: response.tokensUsed?.total || 0,
                   model: response.model || "gpt-3.5-turbo",
                   citations: citations,
+                  // show create button for CRM and LEAVE flows
+                  showCreateButton:
+                    (currentFlow === "CRM" || currentFlow === "LEAVE") && true,
+                  knowledgeBase: citations,
                 },
                 // keep top-level citations for older components that look there
                 citations: citations,
@@ -552,81 +558,75 @@ function App() {
     }
   };
 
-  // ===== Create New Item (CRM / LEAVE) =====
-  const prepareNewItemPayload = (flowKey, msg, messageIndex) => {
-    const flow = FLOWS[flowKey] || {};
-    // Find the most recent user message before this assistant message
-    const prevUser = (() => {
-      for (let i = messageIndex - 1; i >= 0; i--) {
-        const m = messages[i];
-        if (!m) continue;
-        if (m.role === "user" || m.sender === "user") return m;
-      }
-      return null;
-    })();
-
-    const userText = prevUser ? prevUser.content || prevUser.text || "" : "";
-
-    // Build a simple payload mapping expected Kissflow fields
-    const solutionText =
-      (msg.caseSolution && msg.caseSolution.solution) ||
-      msg.caseSolution?.solution ||
-      (msg.metadata &&
-        msg.metadata.citations &&
-        msg.metadata.citations[0]?.title) ||
-      msg.content ||
-      msg.text ||
-      "";
-
-    const title =
-      (msg.caseSolution &&
-        msg.caseSolution.referenceCaseTitle &&
-        msg.caseSolution.referenceCaseTitle[0]?.caseTitle) ||
-      (msg.citations && msg.citations[0]?.title) ||
-      `New case - ${new Date().toISOString()}`;
-
-    const payload = {
-      Case_Title: title,
-      Case_Type: flow.category || flowKey,
-      Case_Description: userText || solutionText,
-      AI_Suggestions: solutionText,
-      Solution_Description: solutionText,
-      Requester_Email: (userInfo && userInfo.email) || "",
-    };
-
-    return payload;
-  };
-
-  const createNewKissflowItem = async (flowKey, msg, messageIndex) => {
+  async function createNewItemInKissflow(payload = {}) {
     try {
-      const flowConfig = FLOWS[flowKey];
-      if (!flowConfig || !flowConfig.kfPopupId) {
-        throw new Error(`No popup configured for flow ${flowKey}`);
+      setIsLoading(true);
+      const flowKey =
+        selectedFlow || mapProcessNameToFlow(processName) || "LEAVE";
+      const flowConfig = flowKey ? FLOWS[flowKey] : null;
+      if (!flowConfig) {
+        throw new Error("No flow configured for creating items");
       }
 
-      const payload = prepareNewItemPayload(flowKey, msg, messageIndex);
-      const kf = await getKissflowSDK();
-      if (!kf) throw new Error("Kissflow SDK not available");
+      // Get user info for Kissflow create API
+      const user = await getUserInfoFromKissflow();
 
-      // Convert values to strings for queryParams
-      const queryParams = Object.fromEntries(
-        Object.entries(payload).map(([k, v]) => [
-          k,
-          v == null ? "" : String(v),
-        ]),
-      );
+      // Create item via service
+      const result = await createKissflowItem({ data: payload }, flowKey, user);
+      setCreatedItemData(result);
 
-      await kf.app.page.openPopup(flowConfig.kfPopupId, { queryParams });
-      console.log(
-        "✅ Opened Kissflow new-item popup",
-        flowConfig.kfPopupId,
-        queryParams,
-      );
+      // For LEAVE we may need to pass specific popup params (_id and _activity_instance_id)
+      if (flowKey === "LEAVE") {
+        const kf = await getKissflowSDK();
+        if (
+          kf &&
+          kf.app &&
+          kf.app.page &&
+          typeof kf.app.page.openPopup === "function"
+        ) {
+          const popupParams = {};
+          const created = result?.result || {};
+          if (created._id) popupParams.leavereqpopupinsid = created._id;
+          if (created._activity_instance_id)
+            popupParams.leavereqpopupatvid = created._activity_instance_id;
+          await kf.app.page.openPopup(flowConfig.kfPopupId, popupParams);
+          return result;
+        }
+      }
+
+      // Default: open popup with created id(s)
+      const createdId = result.id ? [result.id] : [];
+      if (createdId.length)
+        await openKissflowPopup(flowConfig.kfPopupId, createdId, flowKey);
+      return result;
     } catch (err) {
-      console.error("❌ createNewKissflowItem failed:", err);
-      alert("ไม่สามารถสร้างรายการใหม่ได้: " + (err?.message || String(err)));
+      console.error("❌ createNewItemInKissflow failed:", err);
+      throw err;
+    } finally {
+      setIsLoading(false);
     }
-  };
+  }
+
+  function defaultPayloadForFlow(flowKey, msg) {
+    if (!flowKey) return {};
+    if (flowKey === "CRM") {
+      return {
+        Case_Title: msg?.content?.substring(0, 120) || "New Case from AI Chat",
+        Case_Type: "Customer Service",
+        Case_Description: msg?.content || "",
+        AI_Suggestions: "",
+        Solution_Description: "",
+      };
+    }
+    if (flowKey === "LEAVE") {
+      return {
+        Case_Title: "Leave Request from AI Chat",
+        Requester_Email: userInfo?.email || "",
+        Case_Description: msg?.content || "",
+      };
+    }
+    return {};
+  }
 
   // ===== RENDER =====
   // DECISION: REBUILD UI with flow selector, system prompt info, task state display
@@ -735,46 +735,59 @@ function App() {
                     msg.hrResponse.referenceDocuments.length > 0)) && (
                   <div className="citations">
                     <strong>Sources:</strong>
-                    {/* For CRM/LEAVE flows we offer 'Create New Item' instead of opening reference docs */}
-                    {selectedFlow === "CRM" || selectedFlow === "LEAVE" ? (
-                      <div className="refs-inline">
-                        <button
-                          type="button"
-                          className="refs-create-item"
-                          onClick={async () => {
-                            await createNewKissflowItem(selectedFlow, msg, idx);
-                          }}
-                        >
-                          Create New Item in Kissflow
-                        </button>
-                      </div>
-                    ) : (
-                      <CitationList
-                        citations={
-                          msg.citations ||
-                          msg.knowledgeBase ||
-                          (msg.hrResponse &&
-                            msg.hrResponse.referenceDocuments) ||
-                          []
+                    <CitationList
+                      citations={
+                        msg.citations ||
+                        msg.knowledgeBase ||
+                        (msg.hrResponse && msg.hrResponse.referenceDocuments) ||
+                        []
+                      }
+                      onOpenOne={async (ids) => {
+                        if (!ids || !ids.length) {
+                          alert("ไม่พบ instanceID สำหรับ reference นี้");
+                          return;
                         }
-                        onOpenOne={async (ids) => {
-                          if (!ids || !ids.length) {
-                            alert("ไม่พบ instanceID สำหรับ reference นี้");
-                            return;
-                          }
-                          await openInKissflow(ids);
-                        }}
-                        onOpenAll={async (ids) => {
-                          if (!ids || !ids.length) {
-                            alert("ไม่พบ instanceID สำหรับเปิดทั้งหมด");
-                            return;
-                          }
-                          await openInKissflow(ids);
-                        }}
-                      />
-                    )}
+                        await openInKissflow(ids);
+                      }}
+                      onOpenAll={async (ids) => {
+                        if (!ids || !ids.length) {
+                          alert("ไม่พบ instanceID สำหรับเปิดทั้งหมด");
+                          return;
+                        }
+                        await openInKissflow(ids);
+                      }}
+                    />
                   </div>
                 )}
+
+                {/* New Item (CRM / Leave) */}
+                {msg.role === "assistant" &&
+                  ((msg.metadata && msg.metadata.showCreateButton) ||
+                    msg.showCreateButton) &&
+                  (selectedFlow === "CRM" || selectedFlow === "LEAVE") && (
+                    <div className="refs-inline">
+                      <div className="refs-inline-header">
+                        <strong>สร้างรายการใหม่ใน Kissflow</strong>
+                        <button
+                          type="button"
+                          className="refs-create-new"
+                          onClick={async () => {
+                            try {
+                              const payload = defaultPayloadForFlow(
+                                selectedFlow,
+                                msg,
+                              );
+                              await createNewItemInKissflow(payload);
+                            } catch (err) {
+                              alert("สร้างรายการไม่สำเร็จ: " + err?.message);
+                            }
+                          }}
+                        >
+                          ➕ New Item
+                        </button>
+                      </div>
+                    </div>
+                  )}
               </div>
             </div>
           ))}
