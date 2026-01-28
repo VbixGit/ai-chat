@@ -12,7 +12,7 @@ import {
   getWeaviateFieldsForFlow,
   getTranslateQueryToThaiForFlow,
 } from "../../config/flows";
-import { generateEmbedding, translateToThai } from "./openai";
+import { generateEmbedding, translateToThai, translateToEnglish } from "./openai";
 import { debug, debugJson } from "../utils/debug";
 
 export async function queryWeaviate(retrieval) {
@@ -31,9 +31,16 @@ export async function queryWeaviate(retrieval) {
     console.log(`🔍 Querying Weaviate for ${flowKey} flow...`);
     debug("queryWeaviate params:", { flowKey, query, limit, scoreThreshold });
 
-    // Translate query to Thai if required for this flow
-    const shouldTranslate = getTranslateQueryToThaiForFlow(flowKey);
-    const queryToEmbed = shouldTranslate ? await translateToThai(query) : query;
+    // Translate query depending on flow rules:
+    // - HR: translate to English before embedding
+    // - TOR: translate to Thai before embedding (config)
+    // - Others: use original or flow-config translation
+    let queryToEmbed = query;
+    if (flowKey === "HR") {
+      queryToEmbed = await translateToEnglish(query);
+    } else if (getTranslateQueryToThaiForFlow(flowKey)) {
+      queryToEmbed = await translateToThai(query);
+    }
 
     // Get embedding for query
     const embeddingResult = await generateEmbedding({ text: queryToEmbed });

@@ -31,6 +31,7 @@ import {
   getKissflowSDK,
   openKissflowPopup,
   createKissflowItem,
+  fetchUserLeaveData,
 } from "./lib/services/kissflow";
 import { generateChatCompletion } from "./lib/services/openai";
 import { queryWeaviate } from "./lib/services/weaviate";
@@ -131,6 +132,7 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
   const [createdItemData, setCreatedItemData] = useState(null);
+  const [isCreating, setIsCreating] = useState(false);
 
   // No global modal: inline confirmation is handled within CitationList
 
@@ -399,7 +401,22 @@ function App() {
 
       let context = "";
       let citations = [];
-      if (
+      if (currentFlow === "LEAVE") {
+        // Leave flow: fetch user leave data from Kissflow, do NOT query Weaviate
+        try {
+          const leaveUserEmail = (await getUserInfoFromKissflow())?.email;
+          const leaveData = leaveUserEmail
+            ? await fetchUserLeaveData(leaveUserEmail)
+            : [];
+          context = Array.isArray(leaveData)
+            ? JSON.stringify(leaveData.slice(0, 5))
+            : String(leaveData);
+          // For leave balance inquiries we don't populate citations
+          citations = [];
+        } catch (leaveErr) {
+          console.warn("⚠️ Leave data fetch failed:", leaveErr.message || leaveErr);
+        }
+      } else if (
         flowConfig &&
         flowConfig.weaviateClasses &&
         flowConfig.weaviateClasses.length > 0
@@ -469,6 +486,19 @@ function App() {
       // Step 9: Keep response content clean — citations are rendered by the CitationList UI
       let responseContent = response.content;
 
+      // Special handling for LEAVE flow: if user intends to create leave, validate fields and set showCreateButton
+      if (currentFlow === "LEAVE") {
+        const wantCreate = /ขอ|ขอลา|สร้างใบลา|ขอสร้าง|ขออนุญาตลา|ขอ\s*ลา/i.test(userInput);
+        if (wantCreate) {
+          const parsed = await parseLeaveRequest(userInput);
+          // Attach parsed result to assistant metadata so UI can show create button and payload
+          citations = citations || [];
+          // Put parsed.fields into metadata for payload mapping later
+          response.metadata = response.metadata || {};
+          response.metadata.leaveParse = parsed || { valid: false };
+        }
+      }
+
       // Step 10: Update assistant message with actual response
       setMessages((prev) =>
         prev.map((msg) =>
@@ -481,10 +511,16 @@ function App() {
                   tokens: response.tokensUsed?.total || 0,
                   model: response.model || "gpt-3.5-turbo",
                   citations: citations,
-                  // show create button for CRM and LEAVE flows
+                  // show create button for CRM always; for LEAVE only when parsed and valid
                   showCreateButton:
-                    (currentFlow === "CRM" || currentFlow === "LEAVE") && true,
+                    currentFlow === "CRM"
+                      ? true
+                      : currentFlow === "LEAVE"
+                      ? (response.metadata && response.metadata.leaveParse && response.metadata.leaveParse.valid) === true
+                      : false,
                   knowledgeBase: citations,
+                  // include parsed leave validation if present
+                  leaveParse: response.metadata?.leaveParse || null,
                 },
                 // keep top-level citations for older components that look there
                 citations: citations,
@@ -560,7 +596,7 @@ function App() {
 
   async function createNewItemInKissflow(payload = {}) {
     try {
-      setIsLoading(true);
+        setIsCreating(true);
       const flowKey =
         selectedFlow || mapProcessNameToFlow(processName) || "LEAVE";
       const flowConfig = flowKey ? FLOWS[flowKey] : null;
@@ -603,7 +639,7 @@ function App() {
       console.error("❌ createNewItemInKissflow failed:", err);
       throw err;
     } finally {
-      setIsLoading(false);
+        setIsCreating(false);
     }
   }
 
@@ -626,6 +662,25 @@ function App() {
       };
     }
     return {};
+  }
+
+  // Parse and validate leave request using LLM - expects JSON: { valid: bool, fields: {...}, missing: [] }
+  async function parseLeaveRequest(text) {
+    try {
+      const instruction = `Extract leave request fields from the following user text and validate required fields. Return a JSON object with keys: valid (true/false), fields (object with keys leaveType,startDate,endDate,reason), missing (array of missing field names). Only output JSON.`;
+      const res = await generateChatCompletion({
+        systemPrompt:
+          "You are an assistant that extracts and validates leave request details. Output only JSON.",
+        userMessage: `${instruction}\n\nUser text:\n${text}`,
+        chatHistory: [],
+        context: "",
+      });
+      const parsed = JSON.parse(res.content);
+      return parsed;
+    } catch (err) {
+      console.warn("parseLeaveRequest failed:", err);
+      return { valid: false, fields: {}, missing: ["leaveType|startDate|endDate|reason"] };
+    }
   }
 
   // ===== RENDER =====
@@ -773,15 +828,41 @@ function App() {
                           className="refs-create-new"
                           onClick={async () => {
                             try {
-                              const payload = defaultPayloadForFlow(
-                                selectedFlow,
-                                msg,
-                              );
+                              let payload = {};
+                              const flowKey = selectedFlow;
+                              if (flowKey === "LEAVE") {
+                                const leaveParse =
+                                  msg?.metadata?.leaveParse || null;
+                                if (!leaveParse || !leaveParse.valid) {
+                                  alert(
+                                    "ไม่สามารถสร้างคำขอวันลา: ข้อมูลไม่ครบถ้วน",
+                                  );
+                                  return;
+                                }
+                                const f = leaveParse.fields || {};
+                                payload = {
+                                  Case_Title:
+                                    `Leave Request: ${f.leaveType || ""} ${
+                                      f.startDate || ""
+                                    }`.trim(),
+                                  Requester_Email: userInfo?.email || "",
+                                  Case_Description: f.reason || msg?.content || "",
+                                  LeaveType: f.leaveType || "",
+                                  StartDate: f.startDate || "",
+                                  EndDate: f.endDate || "",
+                                  // include parsed fields for backend mapping
+                                  parsed_fields: f,
+                                };
+                              } else {
+                                payload = defaultPayloadForFlow(selectedFlow, msg);
+                              }
+
                               await createNewItemInKissflow(payload);
                             } catch (err) {
                               alert("สร้างรายการไม่สำเร็จ: " + err?.message);
                             }
                           }}
+                          disabled={isCreating}
                         >
                           ➕ New Item
                         </button>

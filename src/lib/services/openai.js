@@ -181,3 +181,46 @@ export async function translateToThai(text) {
     return text;
   }
 }
+
+export async function translateToEnglish(text) {
+  if (!text || text.trim() === "") return text;
+
+  try {
+    console.log("🌐 Translating to English...");
+
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${OPENAI_CONFIG.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: OPENAI_CONFIG.chatModel,
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are a professional translator. Translate the following text to English. Only return the translated text, no explanations.",
+          },
+          { role: "user", content: text },
+        ],
+        temperature: 0,
+        max_tokens: 1000,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Translation API error: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    const translated = data.choices?.[0]?.message?.content || text;
+
+    console.log("✅ Translation to English completed");
+
+    return translated;
+  } catch (error) {
+    console.error("❌ Translation failed:", error);
+    return text;
+  }
+}
