@@ -8,6 +8,7 @@
 
 import KFSDK from "@kissflow/lowcode-client-sdk";
 import { getFlowConfig, isActionAllowedForFlow } from "../../config/flows";
+import { generateChatCompletion } from "./openai";
 
 let kfSDKInstance = null;
 
@@ -166,10 +167,109 @@ export async function fetchUserLeaveData(email) {
     const result = await kf.api(endpoint, options);
     console.log("✅ Leave data fetched");
 
-    return result.data || [];
+    // Normalize response: some KF endpoints return `Data` or `data`
+    return result.Data || result.data || [];
   } catch (error) {
     console.error("❌ Failed to fetch leave data:", error);
     throw error;
+  }
+}
+
+/**
+ * Generate an answer using OpenAI with provided context
+ */
+export async function generateAnswerFromOpenAI(
+  context,
+  question,
+  chatHistory = [],
+) {
+  try {
+    const prompt = `${context}\n\nUser question:\n${question}`;
+    const response = await generateChatCompletion({
+      systemPrompt:
+        "You are a helpful assistant that answers queries about employee leave balances and policies. Reply concisely in the user's language.",
+      userMessage: prompt,
+      chatHistory: chatHistory || [],
+      context: "",
+    });
+    return response.content || "";
+  } catch (err) {
+    console.error("❌ generateAnswerFromOpenAI failed:", err);
+    throw err;
+  }
+}
+
+/**
+ * Handle a leave-related question: fetch user leave data and ask OpenAI to answer
+ */
+export async function handleQuestion(question, chatHistory = []) {
+  try {
+    // Get current user info
+    const userInfo = await getUserInfoFromKissflow();
+    if (!userInfo || !userInfo.email) {
+      return {
+        text: "ไม่สามารถดึงข้อมูล Email ของคุณได้ กรุณาตรวจสอบการเข้าสู่ระบบ Kissflow",
+        sender: "ai",
+        role: "assistant",
+        knowledgeBase: [],
+        kissflowData: null,
+      };
+    }
+
+    // Fetch leave data
+    const leaveDataList = await fetchUserLeaveData(userInfo.email);
+
+    // Find the record that matches the email exactly (double check)
+    const flow = getFlowConfig("LEAVE");
+    const emailField = flow.leaveFields?.Email;
+
+    const userRecord =
+      (Array.isArray(leaveDataList) &&
+        leaveDataList.find((item) => item[emailField] === userInfo.email)) ||
+      (Array.isArray(leaveDataList) ? leaveDataList[0] : null);
+
+    if (!userRecord) {
+      return {
+        text: `ไม่พบข้อมูลวันลาสำหรับ Email: ${userInfo.email}`,
+        sender: "ai",
+        role: "assistant",
+        knowledgeBase: [],
+        kissflowData: null,
+      };
+    }
+
+    // Extract balances
+    const vacation = userRecord[flow.leaveFields?.Vacation] || 0;
+    const personal = userRecord[flow.leaveFields?.Personal] || 0;
+    const sick = userRecord[flow.leaveFields?.Sick] || 0;
+
+    // Build context for AI
+    const context = `ข้อมูลวันลาคงเหลือของพนักงาน:\n- ลาพักร้อน: ${vacation} วัน\n- ลากิจ: ${personal} วัน\n- ลาป่วย: ${sick} วัน`;
+
+    // Generate answer using AI
+    const answer = await generateAnswerFromOpenAI(
+      context,
+      question,
+      chatHistory,
+    );
+
+    return {
+      text: answer,
+      sender: "ai",
+      role: "assistant",
+      knowledgeBase: [],
+      kissflowData: userRecord,
+      showCreateButton: true,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Unknown error";
+    return {
+      text: `เกิดข้อผิดพลาดในการดึงข้อมูล: ${msg}`,
+      sender: "ai",
+      role: "assistant",
+      knowledgeBase: [],
+      showCreateButton: false,
+    };
   }
 }
 

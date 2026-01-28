@@ -32,6 +32,7 @@ import {
   openKissflowPopup,
   createKissflowItem,
   fetchUserLeaveData,
+  handleQuestion,
 } from "./lib/services/kissflow";
 import { generateChatCompletion } from "./lib/services/openai";
 import { queryWeaviate } from "./lib/services/weaviate";
@@ -82,24 +83,21 @@ const translateToEnglish = async (text) => {
         "Translate the following text to English. If it's already in English, return it unchanged.",
       userMessage: text,
       chatHistory: [],
-      context: "",
-    });
-    return response.content.trim();
-  } catch (error) {
-    console.error("Translation error:", error);
-    return text;
-  }
-};
-
-// ===== MAIN APP COMPONENT =====
-// DECISION: COMPLETE REBUILD - Multi-flow, config-driven, language-aware
-
-// CitationList moved to ./components/CitationList for clarity
-
-function App() {
-  // ===== STATE =====
-  // DECISION: KEEP from original, ADD metadata and task state
-  const [messages, setMessages] = useState([]);
+      let context = "";
+      let citations = [];
+      let leaveHandledResponse = null;
+      if (currentFlow === "LEAVE") {
+        // LEAVE flow: delegate to kissflow.handleQuestion which fetches leave data and calls OpenAI
+        try {
+          leaveHandledResponse = await handleQuestion(userInput, []);
+          // leaveHandledResponse expected: { text, kissflowData, knowledgeBase, showCreateButton }
+          context = "";
+          citations = leaveHandledResponse.knowledgeBase || [];
+        } catch (leaveErr) {
+          console.warn("⚠️ Leave handler failed:", leaveErr.message || leaveErr);
+          leaveHandledResponse = null;
+        }
+      } else if (
   const [input, setInput] = useState("");
   const [isDarkMode, setIsDarkMode] = useState(false);
   const messagesEndRef = useRef(null);
@@ -461,33 +459,41 @@ function App() {
       }));
 
       // Step 8: Call OpenAI with system prompt and context
-      console.log("🤖 Calling OpenAI...");
+      let responseContent = null;
+      if (leaveHandledResponse) {
+        // Use the pre-generated leave response
+        responseContent = leaveHandledResponse.text || "";
+      } else {
+        console.log("🤖 Calling OpenAI...");
 
-      // Determine final system prompt:
-      // 1. If currentSystemPrompt exists (from Kissflow), use it
-      // 2. If no process selected (should not reach here), use default
-      // 3. Otherwise, use default
-      const finalSystemPrompt = currentSystemPrompt || getDefaultSystemPrompt();
+        // Determine final system prompt:
+        // 1. If currentSystemPrompt exists (from Kissflow), use it
+        // 2. If no process selected (should not reach here), use default
+        // 3. Otherwise, use default
+        const finalSystemPrompt = currentSystemPrompt || getDefaultSystemPrompt();
 
-      console.log("💬 Using system prompt:", finalSystemPrompt);
-      console.log("📊 Using flow:", currentFlow);
-      console.log("📋 Using process:", currentProcessName);
+        console.log("💬 Using system prompt:", finalSystemPrompt);
+        console.log("📊 Using flow:", currentFlow);
+        console.log("📋 Using process:", currentProcessName);
 
-      const response = await generateChatCompletion({
-        systemPrompt: finalSystemPrompt,
-        userMessage: userInput,
-        chatHistory: chatHistory,
-        context: context,
-      });
+        const response = await generateChatCompletion({
+          systemPrompt: finalSystemPrompt,
+          userMessage: userInput,
+          chatHistory: chatHistory,
+          context: context,
+        });
 
-      if (!response || !response.content) {
-        throw new Error("Empty response from OpenAI");
+        if (!response || !response.content) {
+          throw new Error("Empty response from OpenAI");
+        }
+
+        console.log("✅ OpenAI response received");
+
+        // Step 9: Keep response content clean — citations are rendered by the CitationList UI
+        responseContent = response.content;
+        // attach response object for later metadata usage
+        leaveHandledResponse = { rawOpenAIResponse: response };
       }
-
-      console.log("✅ OpenAI response received");
-
-      // Step 9: Keep response content clean — citations are rendered by the CitationList UI
-      let responseContent = response.content;
 
       // Special handling for LEAVE flow: if user intends to create leave, validate fields and set showCreateButton
       if (currentFlow === "LEAVE") {
