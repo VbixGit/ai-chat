@@ -552,6 +552,82 @@ function App() {
     }
   };
 
+  // ===== Create New Item (CRM / LEAVE) =====
+  const prepareNewItemPayload = (flowKey, msg, messageIndex) => {
+    const flow = FLOWS[flowKey] || {};
+    // Find the most recent user message before this assistant message
+    const prevUser = (() => {
+      for (let i = messageIndex - 1; i >= 0; i--) {
+        const m = messages[i];
+        if (!m) continue;
+        if (m.role === "user" || m.sender === "user") return m;
+      }
+      return null;
+    })();
+
+    const userText = prevUser ? prevUser.content || prevUser.text || "" : "";
+
+    // Build a simple payload mapping expected Kissflow fields
+    const solutionText =
+      (msg.caseSolution && msg.caseSolution.solution) ||
+      msg.caseSolution?.solution ||
+      (msg.metadata &&
+        msg.metadata.citations &&
+        msg.metadata.citations[0]?.title) ||
+      msg.content ||
+      msg.text ||
+      "";
+
+    const title =
+      (msg.caseSolution &&
+        msg.caseSolution.referenceCaseTitle &&
+        msg.caseSolution.referenceCaseTitle[0]?.caseTitle) ||
+      (msg.citations && msg.citations[0]?.title) ||
+      `New case - ${new Date().toISOString()}`;
+
+    const payload = {
+      Case_Title: title,
+      Case_Type: flow.category || flowKey,
+      Case_Description: userText || solutionText,
+      AI_Suggestions: solutionText,
+      Solution_Description: solutionText,
+      Requester_Email: (userInfo && userInfo.email) || "",
+    };
+
+    return payload;
+  };
+
+  const createNewKissflowItem = async (flowKey, msg, messageIndex) => {
+    try {
+      const flowConfig = FLOWS[flowKey];
+      if (!flowConfig || !flowConfig.kfPopupId) {
+        throw new Error(`No popup configured for flow ${flowKey}`);
+      }
+
+      const payload = prepareNewItemPayload(flowKey, msg, messageIndex);
+      const kf = await getKissflowSDK();
+      if (!kf) throw new Error("Kissflow SDK not available");
+
+      // Convert values to strings for queryParams
+      const queryParams = Object.fromEntries(
+        Object.entries(payload).map(([k, v]) => [
+          k,
+          v == null ? "" : String(v),
+        ]),
+      );
+
+      await kf.app.page.openPopup(flowConfig.kfPopupId, { queryParams });
+      console.log(
+        "✅ Opened Kissflow new-item popup",
+        flowConfig.kfPopupId,
+        queryParams,
+      );
+    } catch (err) {
+      console.error("❌ createNewKissflowItem failed:", err);
+      alert("ไม่สามารถสร้างรายการใหม่ได้: " + (err?.message || String(err)));
+    }
+  };
+
   // ===== RENDER =====
   // DECISION: REBUILD UI with flow selector, system prompt info, task state display
   return (
@@ -659,28 +735,44 @@ function App() {
                     msg.hrResponse.referenceDocuments.length > 0)) && (
                   <div className="citations">
                     <strong>Sources:</strong>
-                    <CitationList
-                      citations={
-                        msg.citations ||
-                        msg.knowledgeBase ||
-                        (msg.hrResponse && msg.hrResponse.referenceDocuments) ||
-                        []
-                      }
-                      onOpenOne={async (ids) => {
-                        if (!ids || !ids.length) {
-                          alert("ไม่พบ instanceID สำหรับ reference นี้");
-                          return;
+                    {/* For CRM/LEAVE flows we offer 'Create New Item' instead of opening reference docs */}
+                    {selectedFlow === "CRM" || selectedFlow === "LEAVE" ? (
+                      <div className="refs-inline">
+                        <button
+                          type="button"
+                          className="refs-create-item"
+                          onClick={async () => {
+                            await createNewKissflowItem(selectedFlow, msg, idx);
+                          }}
+                        >
+                          Create New Item in Kissflow
+                        </button>
+                      </div>
+                    ) : (
+                      <CitationList
+                        citations={
+                          msg.citations ||
+                          msg.knowledgeBase ||
+                          (msg.hrResponse &&
+                            msg.hrResponse.referenceDocuments) ||
+                          []
                         }
-                        await openInKissflow(ids);
-                      }}
-                      onOpenAll={async (ids) => {
-                        if (!ids || !ids.length) {
-                          alert("ไม่พบ instanceID สำหรับเปิดทั้งหมด");
-                          return;
-                        }
-                        await openInKissflow(ids);
-                      }}
-                    />
+                        onOpenOne={async (ids) => {
+                          if (!ids || !ids.length) {
+                            alert("ไม่พบ instanceID สำหรับ reference นี้");
+                            return;
+                          }
+                          await openInKissflow(ids);
+                        }}
+                        onOpenAll={async (ids) => {
+                          if (!ids || !ids.length) {
+                            alert("ไม่พบ instanceID สำหรับเปิดทั้งหมด");
+                            return;
+                          }
+                          await openInKissflow(ids);
+                        }}
+                      />
+                    )}
                   </div>
                 )}
               </div>
