@@ -511,36 +511,42 @@ const translateToEnglish = async (text) => {
       }
 
       // Step 10: Update assistant message with actual response
-      setMessages((prev) =>
-        prev.map((msg) =>
-          msg.id === assistantMsgId
-            ? {
-                ...msg,
-                content: responseContent,
-                metadata: {
-                  ...msg.metadata,
-                  tokens: response.tokensUsed?.total || 0,
-                  model: response.model || "gpt-3.5-turbo",
-                  citations: citations,
-                  // show create button for CRM always; for LEAVE only when parsed and valid
-                  showCreateButton:
-                    currentFlow === "CRM"
-                      ? true
-                      : currentFlow === "LEAVE"
-                        ? (response.metadata &&
-                            response.metadata.leaveParse &&
-                            response.metadata.leaveParse.valid) === true
-                        : false,
-                  knowledgeBase: citations,
-                  // include parsed leave validation if present
-                  leaveParse: response.metadata?.leaveParse || null,
-                },
-                // keep top-level citations for older components that look there
-                citations: citations,
-              }
-            : msg,
-        ),
-      );
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === assistantMsgId
+              ? (() => {
+                  // Prefer metadata from leaveHandledResponse if available
+                  const metaFromHandler = leaveHandledResponse?.metadata || null;
+                  const rawOpenAI = leaveHandledResponse?.rawOpenAIResponse || null;
+                  const tokens = rawOpenAI?.tokensUsed?.total || 0;
+                  const model = rawOpenAI?.model || "gpt-3.5-turbo";
+                  const leaveParse = metaFromHandler?.leaveParse || rawOpenAI?.metadata?.leaveParse || null;
+                  return {
+                    ...msg,
+                    content: responseContent,
+                    metadata: {
+                      ...msg.metadata,
+                      tokens: tokens,
+                      model: model,
+                      citations: citations,
+                      // show create button for CRM always; for LEAVE only when parsed and valid
+                      showCreateButton:
+                        currentFlow === "CRM"
+                          ? true
+                          : currentFlow === "LEAVE"
+                            ? (leaveParse && leaveParse.valid) === true
+                            : false,
+                      knowledgeBase: citations,
+                      // include parsed leave validation if present
+                      leaveParse: leaveParse,
+                    },
+                    // keep top-level citations for older components that look there
+                    citations: citations,
+                  };
+                })()
+              : msg,
+          ),
+        );
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : "Unknown error";
       console.error("❌ Error sending message:", errorMsg);
