@@ -63,7 +63,7 @@ export async function generateChatCompletion(request) {
     if (!response.ok) {
       const error = await response.json();
       throw new Error(
-        `OpenAI API error: ${error.error?.message || response.statusText}`
+        `OpenAI API error: ${error.error?.message || response.statusText}`,
       );
     }
 
@@ -90,7 +90,7 @@ export async function generateEmbedding(request) {
 
   console.log(
     "🔑 OpenAI API Key status:",
-    OPENAI_CONFIG.apiKey ? "SET" : "NOT SET"
+    OPENAI_CONFIG.apiKey ? "SET" : "NOT SET",
   );
 
   if (!OPENAI_CONFIG.apiKey) {
@@ -119,7 +119,7 @@ export async function generateEmbedding(request) {
     if (!response.ok) {
       const error = await response.json();
       throw new Error(
-        `OpenAI API error: ${error.error?.message || response.statusText}`
+        `OpenAI API error: ${error.error?.message || response.statusText}`,
       );
     }
 

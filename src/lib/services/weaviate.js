@@ -12,7 +12,11 @@ import {
   getWeaviateFieldsForFlow,
   getTranslateQueryToThaiForFlow,
 } from "../../config/flows";
-import { generateEmbedding, translateToThai, translateToEnglish } from "./openai";
+import {
+  generateEmbedding,
+  translateToThai,
+  translateToEnglish,
+} from "./openai";
 import { debug, debugJson } from "../utils/debug";
 
 export async function queryWeaviate(retrieval) {

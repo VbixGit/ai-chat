@@ -414,7 +414,10 @@ function App() {
           // For leave balance inquiries we don't populate citations
           citations = [];
         } catch (leaveErr) {
-          console.warn("⚠️ Leave data fetch failed:", leaveErr.message || leaveErr);
+          console.warn(
+            "⚠️ Leave data fetch failed:",
+            leaveErr.message || leaveErr,
+          );
         }
       } else if (
         flowConfig &&
@@ -488,7 +491,9 @@ function App() {
 
       // Special handling for LEAVE flow: if user intends to create leave, validate fields and set showCreateButton
       if (currentFlow === "LEAVE") {
-        const wantCreate = /ขอ|ขอลา|สร้างใบลา|ขอสร้าง|ขออนุญาตลา|ขอ\s*ลา/i.test(userInput);
+        const wantCreate = /ขอ|ขอลา|สร้างใบลา|ขอสร้าง|ขออนุญาตลา|ขอ\s*ลา/i.test(
+          userInput,
+        );
         if (wantCreate) {
           const parsed = await parseLeaveRequest(userInput);
           // Attach parsed result to assistant metadata so UI can show create button and payload
@@ -516,8 +521,10 @@ function App() {
                     currentFlow === "CRM"
                       ? true
                       : currentFlow === "LEAVE"
-                      ? (response.metadata && response.metadata.leaveParse && response.metadata.leaveParse.valid) === true
-                      : false,
+                        ? (response.metadata &&
+                            response.metadata.leaveParse &&
+                            response.metadata.leaveParse.valid) === true
+                        : false,
                   knowledgeBase: citations,
                   // include parsed leave validation if present
                   leaveParse: response.metadata?.leaveParse || null,
@@ -596,7 +603,7 @@ function App() {
 
   async function createNewItemInKissflow(payload = {}) {
     try {
-        setIsCreating(true);
+      setIsCreating(true);
       const flowKey =
         selectedFlow || mapProcessNameToFlow(processName) || "LEAVE";
       const flowConfig = flowKey ? FLOWS[flowKey] : null;
@@ -639,7 +646,7 @@ function App() {
       console.error("❌ createNewItemInKissflow failed:", err);
       throw err;
     } finally {
-        setIsCreating(false);
+      setIsCreating(false);
     }
   }
 
@@ -679,7 +686,11 @@ function App() {
       return parsed;
     } catch (err) {
       console.warn("parseLeaveRequest failed:", err);
-      return { valid: false, fields: {}, missing: ["leaveType|startDate|endDate|reason"] };
+      return {
+        valid: false,
+        fields: {},
+        missing: ["leaveType|startDate|endDate|reason"],
+      };
     }
   }
 
@@ -846,7 +857,8 @@ function App() {
                                       f.startDate || ""
                                     }`.trim(),
                                   Requester_Email: userInfo?.email || "",
-                                  Case_Description: f.reason || msg?.content || "",
+                                  Case_Description:
+                                    f.reason || msg?.content || "",
                                   LeaveType: f.leaveType || "",
                                   StartDate: f.startDate || "",
                                   EndDate: f.endDate || "",
@@ -854,7 +866,10 @@ function App() {
                                   parsed_fields: f,
                                 };
                               } else {
-                                payload = defaultPayloadForFlow(selectedFlow, msg);
+                                payload = defaultPayloadForFlow(
+                                  selectedFlow,
+                                  msg,
+                                );
                               }
 
                               await createNewItemInKissflow(payload);
