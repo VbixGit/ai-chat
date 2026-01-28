@@ -399,6 +399,191 @@ body {
     font-size: 0.75rem;
   }
 
+  /* === Citation / References UI Enhancements === */
+  .refs-inline {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+  }
+
+  .refs-inline-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .refs-open-all,
+  .open-kissflow-all-btn {
+    background: linear-gradient(90deg, var(--user-message-background), #0d9169);
+    color: #fff;
+    border: none;
+    padding: 0.35rem 0.65rem;
+    border-radius: 0.5rem;
+    font-size: 0.85rem;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(16, 163, 127, 0.18);
+  }
+
+  .refs-open-all:hover,
+  .open-kissflow-all-btn:hover {
+    transform: translateY(-1px);
+  }
+
+  .refs-inline-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin: 0;
+    padding: 0;
+  }
+
+  .refs-inline-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    background: linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.6),
+      rgba(255, 255, 255, 0.4)
+    );
+    padding: 0.6rem 0.75rem;
+    border-radius: 0.6rem;
+    border: 1px solid var(--border-color);
+  }
+
+  [data-theme="dark"] .refs-inline-item {
+    background: linear-gradient(180deg, #171717, #1a1a1a);
+    border: 1px solid rgba(255, 255, 255, 0.04);
+  }
+
+  .refs-inline-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    min-width: 0;
+  }
+
+  .refs-inline-title {
+    font-weight: 600;
+    font-size: 0.92rem;
+    color: var(--text-color);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .refs-inline-sub {
+    font-size: 0.82rem;
+    color: #6b6b6b;
+  }
+
+  .refs-open-one,
+  .open-kissflow-single-btn {
+    background: transparent;
+    border: 1px solid var(--border-color);
+    color: var(--text-color);
+    padding: 0.35rem 0.6rem;
+    border-radius: 0.45rem;
+    cursor: pointer;
+    font-size: 0.85rem;
+  }
+
+  .refs-open-one:hover,
+  .open-kissflow-single-btn:hover {
+    background: rgba(0, 0, 0, 0.04);
+  }
+
+  .refs-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 0.4rem;
+  }
+
+  /* Small confirmation modal (hidden by default; JS can toggle .visible) */
+  .kf-modal {
+    position: fixed;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 1200;
+  }
+
+  .kf-modal.visible {
+    display: flex;
+  }
+
+  .kf-modal-card {
+    background: var(--container-background);
+    padding: 1rem 1.25rem;
+    border-radius: 0.6rem;
+    width: 420px;
+    max-width: calc(100% - 32px);
+    box-shadow: 0 8px 40px rgba(0, 0, 0, 0.25);
+    text-align: left;
+  }
+
+  .kf-modal-card p {
+    margin: 0 0 0.75rem 0;
+  }
+  .kf-modal-actions {
+    display: flex;
+    gap: 0.5rem;
+    justify-content: flex-end;
+  }
+  .kf-modal-actions button {
+    padding: 0.45rem 0.8rem;
+    border-radius: 0.45rem;
+  }
+
+  /* Accessibility focus styles */
+  button:focus,
+  .refs-open-one:focus,
+  .refs-open-all:focus,
+  .open-kissflow-single-btn:focus,
+  .open-kissflow-all-btn:focus {
+    outline: 3px solid rgba(16, 163, 127, 0.16);
+  }
+
+  @media (max-width: 480px) {
+    .refs-inline-item {
+      padding: 0.5rem;
+    }
+    .refs-open-all,
+    .open-kissflow-all-btn {
+      padding: 0.3rem 0.55rem;
+      font-size: 0.8rem;
+    }
+  }
+
+  /* === Message skeletons === */
+  .message-skeleton {
+    display: inline-block;
+    width: 100%;
+    max-width: 520px;
+    background: linear-gradient(90deg, #f0f0f0, #e9e9e9, #f0f0f0);
+    border-radius: 0.75rem;
+    padding: 0.8rem;
+  }
+  .skeleton-line {
+    height: 10px;
+    background: rgba(0, 0, 0, 0.06);
+    margin-bottom: 8px;
+    border-radius: 6px;
+  }
+  .skeleton-line.short {
+    width: 40%;
+  }
+  .skeleton-line.medium {
+    width: 70%;
+  }
+  .skeleton-line.full {
+    width: 100%;
+  }
   .chat-input-form {
     padding: 0.75rem;
   }

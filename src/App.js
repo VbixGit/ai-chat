@@ -29,6 +29,7 @@ import {
   getProcessNameFromPageVariables,
   isOpenedInKissflow,
   getKissflowSDK,
+  openKissflowPopup,
 } from "./lib/services/kissflow";
 import { generateChatCompletion } from "./lib/services/openai";
 import { queryWeaviate } from "./lib/services/weaviate";
@@ -51,6 +52,7 @@ import {
   formatTaskStatus,
   getTaskDescription,
 } from "./lib/utils/taskState";
+import CitationList from "./components/CitationList";
 
 // ===== UTILITY FUNCTIONS =====
 // DECISION: ADD - Map process_name to flow key
@@ -89,6 +91,8 @@ const translateToEnglish = async (text) => {
 // ===== MAIN APP COMPONENT =====
 // DECISION: COMPLETE REBUILD - Multi-flow, config-driven, language-aware
 
+// CitationList moved to ./components/CitationList for clarity
+
 function App() {
   // ===== STATE =====
   // DECISION: KEEP from original, ADD metadata and task state
@@ -124,6 +128,8 @@ function App() {
   // DECISION: ADD - Loading and error states
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
+
+  // No global modal: inline confirmation is handled within CitationList
 
   // ===== INITIALIZATION =====
   // DECISION: KEEP useEffect pattern, REFACTOR:
@@ -531,18 +537,24 @@ function App() {
 
   const openInKissflow = async (instanceIdsArray) => {
     try {
-      const joined = instanceIdsArray.join(",");
-      const kf = await getKissflowSDK();
-      if (!kf) {
-        throw new Error("Kissflow SDK not initialized");
+      const ids = (instanceIdsArray || [])
+        .map((s) => (s || "").toString().trim())
+        .filter(Boolean);
+      if (!ids.length) {
+        console.warn("⚠️ openInKissflow called with no instance IDs");
+        return;
       }
-      const flowConfig = currentFlow ? FLOWS[currentFlow] : null;
+
+      const flowKey =
+        selectedFlow || mapProcessNameToFlow(processName) || "LEAVE";
+      const flowConfig = flowKey ? FLOWS[flowKey] : null;
       if (!flowConfig || !flowConfig.kfPopupId) {
-        throw new Error("No popup ID configured for current flow");
+        console.warn("⚠️ No popup ID configured for flow", flowKey);
+        return;
       }
+
       const popupId = flowConfig.kfPopupId;
-      await kf.app.page.openPopup(popupId, { instanceidreport: joined });
-      console.log(`📝 Opened Kissflow popup for instances: ${joined}`);
+      await openKissflowPopup(popupId, ids, flowKey);
     } catch (error) {
       console.error("❌ Failed to open Kissflow popup:", error);
     }
@@ -651,66 +663,23 @@ function App() {
                 {msg.citations && msg.citations.length > 0 && (
                   <div className="citations">
                     <strong>Sources:</strong>
-                    <ul className="refs-inline-list">
-                      {msg.citations.map((cite, idx) => {
-                        const displayScore =
-                          cite.score ??
-                          cite._additional?.certainty ??
-                          cite._additional?.score;
-                        return (
-                          <li key={idx} className="refs-inline-item">
-                            <span className="refs-inline-title">
-                              #{cite.index}: {cite.title}
-                              {displayScore
-                                ? ` (${Number(displayScore).toFixed(3)})`
-                                : ""}
-                            </span>
-                            <button
-                              type="button"
-                              className="open-kissflow-single-btn"
-                              onClick={() => {
-                                const id =
-                                  cite.instanceID ||
-                                  cite.instanceId ||
-                                  cite.caseNumber ||
-                                  cite.id ||
-                                  cite._additional?.id;
-                                if (id) openInKissflow([id]);
-                                else
-                                  alert(
-                                    "ไม่พบ instanceID สำหรับ reference นี้",
-                                  );
-                              }}
-                            >
-                              Open
-                            </button>
-                          </li>
-                        );
-                      })}
-                    </ul>
-
-                    <div className="refs-actions">
-                      <button
-                        type="button"
-                        className="open-kissflow-all-btn"
-                        onClick={() => {
-                          const ids = msg.citations
-                            .map(
-                              (c) =>
-                                c.instanceID ||
-                                c.instanceId ||
-                                c.caseNumber ||
-                                c.id ||
-                                c._additional?.id,
-                            )
-                            .filter(Boolean);
-                          if (ids.length) openInKissflow(ids);
-                          else alert("ไม่พบ instanceID สำหรับเปิดทั้งหมด");
-                        }}
-                      >
-                        Open All
-                      </button>
-                    </div>
+                    <CitationList
+                      citations={msg.citations}
+                      onOpenOne={async (ids) => {
+                        if (!ids || !ids.length) {
+                          alert("ไม่พบ instanceID สำหรับ reference นี้");
+                          return;
+                        }
+                        await openInKissflow(ids);
+                      }}
+                      onOpenAll={async (ids) => {
+                        if (!ids || !ids.length) {
+                          alert("ไม่พบ instanceID สำหรับเปิดทั้งหมด");
+                          return;
+                        }
+                        await openInKissflow(ids);
+                      }}
+                    />
                   </div>
                 )}
               </div>
@@ -778,6 +747,7 @@ function App() {
             </button>
           </div>
         </div>
+        {/* Inline confirmation handled inside CitationList; no global modal */}
       </div>
     </div>
   );

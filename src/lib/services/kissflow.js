@@ -279,15 +279,137 @@ export async function getProcessNameFromPageVariables() {
   }
 }
 
-export async function openKissflowPopup(itemId) {
+export async function openKissflowPopup(
+  popupId,
+  instanceIds = [],
+  flowKey = null,
+) {
   try {
     const kf = await getKissflowSDK();
     if (!kf) {
       throw new Error("Kissflow SDK not initialized");
     }
-    console.log(`📝 Opening Kissflow popup for item: ${itemId}`);
-    // TODO: Implement popup opening
+
+    const ids = (instanceIds || [])
+      .map((s) => (s || "").toString().trim())
+      .filter(Boolean);
+    if (!ids.length) {
+      console.warn("⚠️ openKissflowPopup called with no instance IDs");
+      return;
+    }
+
+    const joined = ids.join(",");
+    const paramName =
+      flowKey === "HR" || flowKey === "TOR" ? "instanceidreport" : "ids";
+    const queryParams = { [paramName]: joined };
+
+    console.log(
+      `📝 Opening Kissflow popup '${popupId}' for flow '${flowKey}' with params:`,
+      queryParams,
+    );
+
+    // Strategy 1: use SDK popup API if available
+    if (kf.app && kf.app.popup && typeof kf.app.popup.open === "function") {
+      try {
+        await kf.app.popup.open(popupId, { queryParams });
+        console.log("✅ Popup opened via kf.app.popup.open");
+        return;
+      } catch (err) {
+        console.warn("⚠️ kf.app.popup.open failed:", err.message || err);
+      }
+    }
+
+    // Strategy 2: use page.openPopup if available
+    if (kf.app && kf.app.page && typeof kf.app.page.openPopup === "function") {
+      try {
+        await kf.app.page.openPopup(popupId, { queryParams });
+        console.log("✅ Popup opened via kf.app.page.openPopup");
+        return;
+      } catch (err) {
+        console.warn("⚠️ kf.app.page.openPopup failed:", err.message || err);
+      }
+    }
+
+    // Strategy 3: fallback to constructing a URL and opening a new window/tab
+    try {
+      const base =
+        typeof window !== "undefined" &&
+        window.location &&
+        window.location.origin
+          ? window.location.origin
+          : "";
+      const url = `${base}?popup=${encodeURIComponent(popupId)}&${encodeURIComponent(paramName)}=${encodeURIComponent(joined)}`;
+      if (typeof window !== "undefined" && window.open) {
+        window.open(url, "_blank");
+        console.log("✅ Popup opened via window.open fallback", url);
+        return;
+      }
+    } catch (err) {
+      console.warn("⚠️ Fallback window.open failed:", err.message || err);
+    }
+
+    console.error(
+      "❌ Unable to open Kissflow popup: no available method succeeded",
+    );
   } catch (error) {
     console.error("❌ Failed to open Kissflow popup:", error);
+  }
+}
+
+// Return the query parameter name used for popup calls for a given flow
+export function getPopupParamNameForFlow(flowKey) {
+  return flowKey === "HR" || flowKey === "TOR" ? "instanceidreport" : "ids";
+}
+
+// Lightweight integration check that validates SDK initialization and popup APIs
+// This is non-destructive and will NOT open any UI. Use in diagnostics.
+export async function testKissflowIntegration(
+  flowKey = null,
+  sampleInstanceIds = [],
+) {
+  try {
+    const kf = await getKissflowSDK();
+    const sdkInitialized = !!kf;
+
+    const popupApiAvailable = !!(
+      kf &&
+      ((kf.app && kf.app.popup && typeof kf.app.popup.open === "function") ||
+        (kf.app && kf.app.page && typeof kf.app.page.openPopup === "function"))
+    );
+
+    const popupId = (() => {
+      try {
+        if (!flowKey) return null;
+        const flow = getFlowConfig(flowKey);
+        return flow?.kfPopupId || null;
+      } catch (e) {
+        return null;
+      }
+    })();
+
+    const paramName = getPopupParamNameForFlow(flowKey || "");
+
+    return {
+      sdkInitialized,
+      popupApiAvailable,
+      popupId,
+      paramName,
+      sampleInstanceIds: (sampleInstanceIds || []).slice(0, 10),
+      message: sdkInitialized
+        ? popupApiAvailable
+          ? "Kissflow SDK initialized and popup API appears available"
+          : "Kissflow SDK initialized but popup API not detected"
+        : "Kissflow SDK not initialized",
+    };
+  } catch (error) {
+    return {
+      sdkInitialized: false,
+      popupApiAvailable: false,
+      popupId: null,
+      paramName: getPopupParamNameForFlow(flowKey || ""),
+      sampleInstanceIds: (sampleInstanceIds || []).slice(0, 10),
+      message: `Error during integration test: ${error?.message || String(error)}`,
+      error: error?.message || String(error),
+    };
   }
 }
