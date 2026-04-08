@@ -1,14 +1,36 @@
 import React, { useState, useEffect, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import "./App.css";
-import KFSDK from "@kissflow/lowcode-client-sdk";
 
-const WEAVIATE_ENDPOINT = process.env.REACT_APP_WEAVIATE_ENDPOINT;
-const WEAVIATE_API_KEY = process.env.REACT_APP_WEAVIATE_API_KEY;
-const OPENAI_API_KEY = process.env.REACT_APP_OPENAI_API_KEY;
+// Safely read environment variables in the browser. Webpack's DefinePlugin
+// may not always inject `process.env` (or the app may run without it), so
+// guard to avoid "process is not defined" runtime errors.
+function getEnv(name, fallback = "") {
+  try {
+    if (
+      typeof process !== "undefined" &&
+      process &&
+      process.env &&
+      process.env[name] != null
+    ) {
+      return process.env[name];
+    }
+  } catch (e) {
+    // ignore
+  }
+  if (
+    typeof window !== "undefined" &&
+    window.__ENV__ &&
+    window.__ENV__[name] != null
+  ) {
+    return window.__ENV__[name];
+  }
+  return fallback;
+}
 
-// ===== Kissflow integration config =====
-const KF_POPUP_ID = "Popup_RfPa09F_CO";
+const WEAVIATE_ENDPOINT = getEnv("REACT_APP_WEAVIATE_ENDPOINT", "");
+const WEAVIATE_API_KEY = getEnv("REACT_APP_WEAVIATE_API_KEY", "");
+const OPENAI_API_KEY = getEnv("REACT_APP_OPENAI_API_KEY", "");
 
 const ENABLE_TOKEN_LOGGING = true;
 const ENABLE_STREAMING_EFFECT = true;
@@ -154,7 +176,17 @@ function App() {
   const [processingStep, setProcessingStep] = useState("");
   const [isDarkMode, setIsDarkMode] = useState(false);
   const messagesEndRef = useRef(null);
-  const kfRef = useRef(null);
+
+  // Conversation persistence and context monitoring
+  const [conversationLog, setConversationLog] = useState(() => {
+    try {
+      const raw = localStorage.getItem("conversation_log");
+      return raw ? JSON.parse(raw) : [];
+    } catch (e) {
+      return [];
+    }
+  });
+  const [contextWarning, setContextWarning] = useState(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -168,16 +200,96 @@ function App() {
     }
   }, [isDarkMode]);
 
-  async function getKf() {
-    if (!kfRef.current) {
-      try {
-        kfRef.current = await KFSDK.initialize();
-      } catch (err) {
-        console.warn("KFSDK initialize failed:", err);
-        kfRef.current = null;
-      }
+  // Removed Kissflow SDK integration (getKf/openInKissflow) per refactor
+
+  // -- Conversation logging helpers --
+  function buildConversationLog(messagesArray = []) {
+    return messagesArray.map((m, i) => ({
+      seq: i + 1,
+      role: m.role || (m.sender === "user" ? "user" : "assistant"),
+      message: m.text,
+      timestamp: m.timestamp || new Date().toISOString(),
+    }));
+  }
+
+  function saveConversationLog(messagesArray = []) {
+    const log = buildConversationLog(messagesArray);
+    try {
+      localStorage.setItem("conversation_log", JSON.stringify(log, null, 2));
+      setConversationLog(log);
+    } catch (err) {
+      console.warn("Failed saving conversation log", err);
     }
-    return kfRef.current;
+  }
+
+  // -- Context size estimation and warning --
+  const OPENAI_CONTEXT_LIMIT = parseInt(
+    getEnv("REACT_APP_OPENAI_CONTEXT_LIMIT", "8192"),
+    10,
+  );
+
+  function estimateTokensFromMessages(messagesArray = []) {
+    const text = (messagesArray || []).map((m) => m.text || "").join(" ");
+    return Math.max(1, Math.ceil(text.length / 4));
+  }
+
+  function checkContextSizeAndWarn(messagesArray = []) {
+    const tokens = estimateTokensFromMessages(messagesArray);
+    const nearThreshold = Math.floor(OPENAI_CONTEXT_LIMIT * 0.8);
+    if (tokens >= OPENAI_CONTEXT_LIMIT) {
+      setContextWarning({ level: "over", tokens, limit: OPENAI_CONTEXT_LIMIT });
+      console.warn(
+        `Context tokens ${tokens} exceed limit ${OPENAI_CONTEXT_LIMIT}`,
+      );
+    } else if (tokens >= nearThreshold) {
+      setContextWarning({ level: "near", tokens, limit: OPENAI_CONTEXT_LIMIT });
+      console.warn(
+        `Context tokens ${tokens} near limit ${OPENAI_CONTEXT_LIMIT}`,
+      );
+    } else {
+      setContextWarning(null);
+    }
+    return tokens;
+  }
+
+  // -- Simple retrieval decision function (scalable) --
+  // Decides whether to query external knowledge (Weaviate) for a question.
+  function shouldRetrieveFromKnowledgeBase(question = "", chatHistory = []) {
+    const q = (question || "").toLowerCase();
+    const keywords = [
+      "reimburse",
+      "reimbursement",
+      "expense",
+      "claim",
+      "travel",
+      "trip",
+      "allowance",
+      "เบิก",
+      "ค่าใช้จ่าย",
+      "การเดินทาง",
+      "ค่าโดยสาร",
+      "นโยบาย",
+      "นโยบายการ",
+      "เบิกค่าใช้จ่าย",
+    ];
+    if (keywords.some((k) => q.includes(k))) return true;
+    if (q.includes("document") || q.includes("เอกสาร") || q.includes("policy"))
+      return true;
+    return false;
+  }
+
+  function copyToClipboard(text) {
+    if (!navigator?.clipboard) {
+      alert("Clipboard not supported in this browser");
+      return;
+    }
+    navigator.clipboard
+      .writeText(String(text))
+      .then(() => alert("Copied to clipboard"))
+      .catch((err) => {
+        console.error("Copy failed", err);
+        alert("Copy failed: " + (err?.message || err));
+      });
   }
 
   /**
@@ -190,18 +302,36 @@ function App() {
     e.preventDefault();
     if (!input.trim()) return;
 
-    const userMessage = { text: input, sender: "user", role: "user" };
-    setMessages((prev) => [...prev, userMessage]);
+    const userMessage = {
+      text: input,
+      sender: "user",
+      role: "user",
+      timestamp: new Date().toISOString(),
+    };
+
+    const newHistory = [...messages, userMessage];
+    setMessages(newHistory);
+    saveConversationLog(newHistory);
     setInput("");
     setIsTyping(true);
 
+    // Check context size and warn if needed
+    checkContextSizeAndWarn(newHistory);
+
     // Pass full conversation history for LLM context
-    const aiResponse = await handleQuestion(input, [...messages]);
-    if (Array.isArray(aiResponse)) {
-      setMessages((prev) => [...prev, ...aiResponse]);
-    } else {
-      setMessages((prev) => [...prev, aiResponse]);
-    }
+    const aiResponse = await handleQuestion(input, newHistory);
+    const aiResponses = Array.isArray(aiResponse) ? aiResponse : [aiResponse];
+
+    const finalHistory = [
+      ...newHistory,
+      ...aiResponses.map((r) => ({
+        ...r,
+        timestamp: r.timestamp || new Date().toISOString(),
+      })),
+    ];
+
+    setMessages(finalHistory);
+    saveConversationLog(finalHistory);
     setIsTyping(false);
     setProcessingStep("");
   };
@@ -252,28 +382,44 @@ function App() {
       console.log(`[0] Detected Language: ${detectedLanguage}`);
       console.log("[0] Translated Text:", translatedText);
 
-      // Step 1: Generate embedding from user input (using translated text)
-      if (ENABLE_PROCESSING_ANIMATION)
-        setProcessingStep("Generating embedding...");
-      console.log("[2] Generating embedding...");
-      const { embedding, usage: embeddingUsage } =
-        await generateEmbeddingForCase(translatedText);
-      accumulateUsage(embeddingUsage);
-      console.log("[2] Embedding generated. Vector length:", embedding.length);
-
-      // Step 2: Query Weaviate with nearVector search
-      if (ENABLE_PROCESSING_ANIMATION)
-        setProcessingStep("Searching knowledge base...");
-      console.log("[3] Searching Weaviate...");
-      const weaviateResults = await searchWeaviateForCases(
-        embedding,
-        translatedText
+      // Decide whether to retrieve external knowledge (Weaviate)
+      const retrievalNeeded = shouldRetrieveFromKnowledgeBase(
+        translatedText,
+        chatHistory,
       );
-      console.log("[3] Raw Weaviate results:", weaviateResults.length);
+      console.log("[1.5] Retrieval needed:", retrievalNeeded);
 
-      // Step 3: Transform results into cleanedKnowledgeBase
-      const cleanedKB = transformToCleanedKB(weaviateResults);
-      console.log("[4] Cleaned documents:", cleanedKB.length);
+      let cleanedKB = [];
+      let embeddingUsage = null;
+
+      if (retrievalNeeded) {
+        if (ENABLE_PROCESSING_ANIMATION)
+          setProcessingStep("Generating embedding...");
+        console.log("[2] Generating embedding...");
+        const { embedding, usage: _embeddingUsage } =
+          await generateEmbeddingForCase(translatedText);
+        embeddingUsage = _embeddingUsage;
+        accumulateUsage(embeddingUsage);
+        console.log(
+          "[2] Embedding generated. Vector length:",
+          embedding.length,
+        );
+
+        if (ENABLE_PROCESSING_ANIMATION)
+          setProcessingStep("Searching knowledge base...");
+        console.log("[3] Searching Weaviate...");
+        const weaviateResults = await searchWeaviateForCases(
+          embedding,
+          translatedText,
+        );
+        console.log("[3] Raw Weaviate results:", weaviateResults.length);
+
+        // Step 3: Transform results into cleanedKnowledgeBase
+        cleanedKB = transformToCleanedKB(weaviateResults);
+        console.log("[4] Cleaned documents:", cleanedKB.length);
+      } else {
+        console.log("[2] Skipping knowledge retrieval per decision function");
+      }
 
       // Log document details for debugging
       if (cleanedKB.length > 0) {
@@ -282,7 +428,7 @@ function App() {
           console.log(
             `   Doc ${i + 1}: "${doc.documentTopic}" (${(
               doc.certainty * 100
-            ).toFixed(1)}%)`
+            ).toFixed(1)}%)`,
           );
         });
       } else {
@@ -312,7 +458,7 @@ ${
               c.documentDescription
             }\n   Content: ${c.documentDetail}\n   Match Confidence: ${(
               c.certainty * 100
-            ).toFixed(0)}%`
+            ).toFixed(0)}%`,
         )
         .join("\n\n")
     : "No matching documents found"
@@ -341,13 +487,13 @@ ${
       // Step 6: Validate and return response - if no relevant documents, show "not found" message
       if (!hrResponse.hasRelevantDocument) {
         console.log(
-          "[6] ⚠️  No relevant documents found - returning error message"
+          "[6] ⚠️  No relevant documents found - returning error message",
         );
       } else {
         console.log(
           "[6] ✓ Response ready with",
           hrResponse.referenceDocuments?.length || 0,
-          "referenced documents"
+          "referenced documents",
         );
 
         // Validate that referenced documents match the ones we provided
@@ -430,7 +576,7 @@ ${
     try {
       console.log(
         "   → Translating and detecting language:",
-        text.substring(0, 50) + "..."
+        text.substring(0, 50) + "...",
       );
       const response = await fetch(
         "https://api.openai.com/v1/chat/completions",
@@ -458,7 +604,7 @@ ${
             ],
             response_format: { type: "json_object" },
           }),
-        }
+        },
       );
 
       if (!response.ok) {
@@ -474,7 +620,7 @@ ${
       const usage = data.usage;
 
       console.log(
-        `   ✓ Detected: ${detectedLanguage}, Translated: ${translatedText}`
+        `   ✓ Detected: ${detectedLanguage}, Translated: ${translatedText}`,
       );
       return { translatedText, detectedLanguage, usage };
     } catch (err) {
@@ -495,7 +641,7 @@ ${
 
       console.log(
         "   → Creating embedding for:",
-        cleanedText.substring(0, 50) + "..."
+        cleanedText.substring(0, 50) + "...",
       );
 
       const response = await fetch("https://api.openai.com/v1/embeddings", {
@@ -570,7 +716,7 @@ ${
       if (json.errors) {
         console.error("   ✗ Weaviate GraphQL errors:", json.errors);
         throw new Error(
-          `Weaviate GraphQL errors: ${JSON.stringify(json.errors)}`
+          `Weaviate GraphQL errors: ${JSON.stringify(json.errors)}`,
         );
       }
 
@@ -585,8 +731,8 @@ ${
           const topic = r.documentTopic || "No topic";
           console.log(
             `      ${i + 1}. ${(certainty * 100).toFixed(
-              1
-            )}% - "${topic.substring(0, 50)}"`
+              1,
+            )}% - "${topic.substring(0, 50)}"`,
           );
         });
       }
@@ -596,11 +742,11 @@ ${
       console.log(`   → Filtering by threshold: ${RELEVANCE_THRESHOLD * 100}%`);
 
       const filteredResults = results.filter(
-        (item) => (item._additional?.certainty || 0) >= RELEVANCE_THRESHOLD
+        (item) => (item._additional?.certainty || 0) >= RELEVANCE_THRESHOLD,
       );
 
       console.log(
-        `   → Documents passing threshold: ${filteredResults.length}`
+        `   → Documents passing threshold: ${filteredResults.length}`,
       );
 
       // Return top 5 most relevant results after filtering
@@ -624,7 +770,7 @@ ${
   async function generateHRResponse(
     instructionPrompt,
     chatHistory,
-    cleanedKB = []
+    cleanedKB = [],
   ) {
     // Optimize: Use only recent conversation (last 2 user messages) to reduce tokens
     const recentHistory = (chatHistory || [])
@@ -673,7 +819,7 @@ Return response in this exact JSON format:
             Authorization: `Bearer ${OPENAI_API_KEY}`,
           },
           body: JSON.stringify(requestBody),
-        }
+        },
       );
 
       if (!response.ok) {
@@ -682,7 +828,7 @@ Return response in this exact JSON format:
           "[HR Assistant] API Error Response:",
           errorText,
           "Status:",
-          response.status
+          response.status,
         );
         throw new Error(`LLM API error: ${response.status}`);
       }
@@ -718,33 +864,7 @@ Return response in this exact JSON format:
     }
   }
 
-  // ===== Kissflow opener =====
-  async function openInKissflow(instanceIdsArray) {
-    const ids = (instanceIdsArray || [])
-      .map((s) => (s || "").trim())
-      .filter(Boolean);
-    if (!ids.length) {
-      alert("ไม่พบ instanceID สำหรับส่งไป Kissflow");
-      return;
-    }
-    const joined = ids.join(",");
-
-    const kf = await getKf();
-    if (!kf) {
-      alert(
-        "ไม่สามารถเชื่อมต่อ Kissflow SDK ได้ (ต้องเปิดจาก Custom Page ภายใน Kissflow)"
-      );
-      return;
-    }
-
-    try {
-      console.log("instanceidreport:", joined);
-      await kf.app.page.openPopup(KF_POPUP_ID, { instanceidreport: joined });
-    } catch (err) {
-      console.error("Open popup failed:", err);
-      alert("เปิด popup ไม่สำเร็จ: " + (err?.message || "unknown error"));
-    }
-  }
+  // Kissflow integration removed — replaced with local copy/inspect helpers
 
   // ===== UI =====
   return (
@@ -788,6 +908,13 @@ Return response in this exact JSON format:
             </svg>
           )}
         </button>
+        {contextWarning && (
+          <div className={`context-warning ${contextWarning.level}`}>
+            {contextWarning.level === "over"
+              ? `Context tokens ${contextWarning.tokens} exceed limit ${contextWarning.limit}. Consider truncating history or summarizing.`
+              : `Context tokens ${contextWarning.tokens} nearing limit ${contextWarning.limit}. Consider truncating history.`}
+          </div>
+        )}
       </div>
 
       <div className="chat-container">
@@ -822,13 +949,15 @@ Return response in this exact JSON format:
                           type="button"
                           className="refs-open-all"
                           onClick={() =>
-                            openInKissflow(
-                              msg.knowledgeBase.map((r) => r.instanceID)
+                            copyToClipboard(
+                              msg.knowledgeBase
+                                .map((r) => r.instanceID)
+                                .join(","),
                             )
                           }
-                          title="Open all in Kissflow"
+                          title="Copy all instance IDs"
                         >
-                          Open all ({msg.knowledgeBase.length})
+                          Copy all ({msg.knowledgeBase.length})
                         </button>
                       </div>
 
@@ -852,10 +981,10 @@ Return response in this exact JSON format:
                             <button
                               type="button"
                               className="refs-open-one"
-                              onClick={() => openInKissflow([r.instanceID])}
-                              title="Open in Kissflow"
+                              onClick={() => copyToClipboard(r.instanceID)}
+                              title="Copy instance ID"
                             >
-                              Open
+                              Copy
                             </button>
                           </li>
                         ))}
