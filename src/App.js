@@ -1084,21 +1084,16 @@ ${
     `;
 
     try {
-      const base = (WEAVIATE_ENDPOINT || "")
-        .toString()
-        .trim()
-        .replace(/\/+$/, "");
-      if (!base) throw new Error("REACT_APP_WEAVIATE_ENDPOINT is not set.");
-      const url = `${base}/v1/graphql`;
-      console.log("   → Querying Weaviate:", url);
-
-      const headers = { "Content-Type": "application/json" };
-      if (WEAVIATE_API_KEY)
-        headers.Authorization = `Bearer ${WEAVIATE_API_KEY}`;
+      // Always call the same-origin proxy path — the browser never contacts
+      // weaviate.vbix.net directly, so CORS is never triggered.
+      // Local dev : webpack-dev-server proxy forwards to Weaviate server-side.
+      // Vercel    : api/weaviate.js serverless function forwards server-side.
+      const url = "/api/weaviate";
+      console.log("   → Querying Weaviate via proxy:", url);
 
       const response = await fetch(url, {
         method: "POST",
-        headers,
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: gql }),
       });
 

@@ -42,6 +42,49 @@ module.exports = {
 
   devServer: {
     static: "./dist",
+    // Proxy /api/weaviate → Weaviate server-side so the browser never makes a
+    // cross-origin request (no CORS issue). Mirrors api/weaviate.js on Vercel.
+    proxy: (() => {
+      const target =
+        env.REACT_APP_WEAVIATE_ENDPOINT ||
+        process.env.REACT_APP_WEAVIATE_ENDPOINT ||
+        "";
+      const apiKey =
+        env.REACT_APP_WEAVIATE_API_KEY ||
+        process.env.REACT_APP_WEAVIATE_API_KEY ||
+        "";
+      const cfClientId =
+        env.CF_ACCESS_CLIENT_ID || process.env.CF_ACCESS_CLIENT_ID || "";
+      const cfClientSecret =
+        env.CF_ACCESS_CLIENT_SECRET ||
+        process.env.CF_ACCESS_CLIENT_SECRET ||
+        "";
+      if (!target) {
+        console.warn(
+          "[webpack proxy] REACT_APP_WEAVIATE_ENDPOINT not set — proxy disabled.",
+        );
+        return [];
+      }
+      const proxyHeaders = { "Content-Type": "application/json" };
+      if (apiKey) proxyHeaders.Authorization = `Bearer ${apiKey}`;
+      // Cloudflare Access service token — required when the Weaviate host is
+      // protected by Cloudflare Access (returns 403 without these headers).
+      if (cfClientId) proxyHeaders["CF-Access-Client-Id"] = cfClientId;
+      if (cfClientSecret)
+        proxyHeaders["CF-Access-Client-Secret"] = cfClientSecret;
+      const proxyEntry = {
+        context: ["/api/weaviate"],
+        target: target.replace(/\/+$/, ""),
+        changeOrigin: true,
+        secure: true,
+        pathRewrite: { "^/api/weaviate": "/v1/graphql" },
+        headers: proxyHeaders,
+      };
+      console.log(
+        `[webpack proxy] /api/weaviate → ${proxyEntry.target}/v1/graphql`,
+      );
+      return [proxyEntry];
+    })(),
   },
 
   module: {
