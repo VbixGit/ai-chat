@@ -698,18 +698,27 @@ function App() {
 
       setProcessingStep("Submitting request to Nocoly...");
 
-      // Use the same-origin proxy path so the browser never contacts
-      // www.nocoly.com directly (avoids CORS block).
-      // Local dev : webpack-dev-server proxy forwards to Nocoly server-side.
-      // Vercel    : api/nocoly.js serverless function forwards server-side.
-      const url = "/api/nocoly";
+      const myHeaders = new Headers();
+      myHeaders.append("HAP-Appkey", "0267badb903abfa0");
+      myHeaders.append(
+        "HAP-Sign",
+        "YTFiMzE5ZDk4NDBmNDNmNjllOWMxYjU4MWY2YTQ5ZTQwNTU3MmMzZmM2MWZmM2JmOWYwNjYwY2U2OTk3YWJmNw==",
+      );
+      myHeaders.append("Content-Type", "application/json");
 
-      const resp = await fetch(url, {
+      const raw = JSON.stringify({ triggerWorkflow: true, fields });
+
+      const requestOptions = {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ triggerWorkflow: true, fields }),
-      });
+        headers: myHeaders,
+        body: raw,
+        redirect: "follow",
+      };
 
+      const url =
+        "https://www.nocoly.com/api/v3/app/worksheets/69d4b45ffa7982b82bd74399/rows";
+
+      const resp = await fetch(url, requestOptions);
       const text = await resp.text();
       if (!resp.ok) {
         console.error("Nocoly API error", resp.status, text);
