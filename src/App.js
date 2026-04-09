@@ -111,18 +111,22 @@ Your role: Answer employee questions about company policies, benefits, and regul
 - **Do NOT mix languages.** Keep the response in the single language of the user's question.`;
 
 // ===== Weaviate Collection Configuration =====
-const WEAVIATE_COLLECTION = "HRMixlangRAG";
+// Use NocolyTripAI as the source for travel reimbursement knowledge
+const WEAVIATE_COLLECTION = "NocolyTripAI";
 const WEAVIATE_FIELDS = `
   instanceID
   documentDetail
   requesterName
   documentDescription
-  requesterEmail
   documentTopic
   _additional {
     certainty
   }
 `;
+// WARNING: This app now makes direct requests to Weaviate from the browser.
+// That requires the Weaviate endpoint to allow CORS and will expose the
+// `REACT_APP_WEAVIATE_API_KEY` and `REACT_APP_OPENAI_API_KEY` in the client.
+// This is intentional per project constraint (frontend-only).
 
 // ===== Helpers =====
 const safeJson = (x) => {
@@ -292,6 +296,321 @@ function App() {
       });
   }
 
+  // --- Configurable token reporting (state-controlled, no UI control) ---
+  const [tokenLoggingEnabled, setTokenLoggingEnabled] =
+    useState(ENABLE_TOKEN_LOGGING);
+
+  // Programmatic toggle for token usage reporting (call from code/tests)
+  function setTokenUsageReport(enabled) {
+    setTokenLoggingEnabled(Boolean(enabled));
+  }
+
+  // Analyze accumulated chat log JSON and attempt to extract trip-related fields
+  function analyzeChatLog(messagesArray = []) {
+    const text = (messagesArray || []).map((m) => m.text || "").join("\n");
+    const lower = text.toLowerCase();
+
+    // Extract dates (support yyyy-mm-dd, dd/mm/yyyy, dd-mm-yyyy)
+    const ymd = /\b(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})\b/g;
+    const dmy = /\b(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})\b/g;
+    const dates = [];
+    let m;
+    while ((m = ymd.exec(text)) !== null) {
+      dates.push(`${m[1]}-${parseInt(m[2], 10)}-${parseInt(m[3], 10)}`);
+    }
+    while ((m = dmy.exec(text)) !== null) {
+      dates.push(`${m[3]}-${parseInt(m[2], 10)}-${parseInt(m[1], 10)}`);
+    }
+
+    let startDate = null;
+    let endDate = null;
+    if (dates.length >= 2) {
+      startDate = dates[0];
+      endDate = dates[1];
+    } else if (dates.length === 1) {
+      startDate = dates[0];
+    }
+
+    // Heuristics for other fields
+    const travelType =
+      lower.includes("ไปราชการในราชอาณาจักร") || lower.includes("ในราชอาณาจักร")
+        ? "ไปราชการในราชอาณาจักร"
+        : lower.includes("ไปราชการต่างประเทศ") || lower.includes("ต่างประเทศ")
+          ? "ไปราชการต่างประเทศชั่วคราว"
+          : lower.includes("ไปราชการประจำ")
+            ? "ไปราชการประจำในต่างประเทศ"
+            : null;
+
+    const reimbursementType = lower.includes("เหมาจ่าย")
+      ? "เหมาจ่าย"
+      : lower.includes("จ่ายจริง")
+        ? "จ่ายจริง"
+        : null;
+
+    // Country / category type detection (only accept explicit mentions)
+    const allowedCountryCandidates = [
+      "ประเภท ก",
+      "ประเภท ข",
+      "Option 3",
+      "ประเภท ค",
+      "ประเภท ง",
+      "ประเภท จ",
+    ];
+    let countryType = null;
+    for (const c of allowedCountryCandidates) {
+      if (text.includes(c) || lower.includes(c.toLowerCase())) {
+        countryType = c;
+        break;
+      }
+    }
+
+    // Destination and purpose
+    let destination = null;
+    const destMatch = text.match(/สถานที่(?:ไปราชการ)?[:：\s]*([^\n,\.]+)/i);
+    if (destMatch) destination = destMatch[1].trim();
+    else {
+      const m2 = text.match(/ไป(?:ที่)?\s+([^\n,\.]+)/i);
+      if (m2) destination = m2[1].trim();
+    }
+
+    let purpose = null;
+    const pMatch = text.match(/วัตถุประสงค์(?:การเดินทาง)?[:：\s]*([^\n]+)/i);
+    if (pMatch) purpose = pMatch[1].trim();
+    else {
+      const p2 = text.match(/เพื่อ\s+([^\n,\.]+)/i);
+      if (p2) purpose = p2[1].trim();
+    }
+
+    // Numeric amounts (capture numbers followed by 'บาท')
+    const bahtRegex = /([0-9,]+(?:\.[0-9]+)?)\s*บาท/gi;
+    const foundAmounts = [];
+    while ((m = bahtRegex.exec(text)) !== null) {
+      foundAmounts.push(parseFloat(m[1].replace(/,/g, "")));
+    }
+
+    const amounts = {};
+    if (foundAmounts.length === 1) amounts.travelTotal = foundAmounts[0];
+    else if (foundAmounts.length >= 3) {
+      amounts.travelTotal = foundAmounts[0];
+      amounts.accommodationTotal = foundAmounts[1];
+      amounts.clothingTotal = foundAmounts[2];
+    }
+
+    const extraFieldMatch = text.match(/ข้าราชการ\s*([ก-ฮA-Za-z0-9]+)/i);
+    const extraField = extraFieldMatch
+      ? `ข้าราชการ ${extraFieldMatch[1]}`
+      : null;
+
+    const extracted = {
+      purpose,
+      travelType,
+      countryType,
+      destination,
+      startDate,
+      endDate,
+      reimbursementType,
+      ...amounts,
+      extraField,
+    };
+
+    const required = ["purpose", "startDate", "endDate", "destination"];
+    const missing = required.filter((k) => !extracted[k]);
+
+    return {
+      extracted,
+      missing,
+      isComplete: missing.length === 0,
+      rawText: text,
+    };
+  }
+
+  // Map extracted trip data into Nocoly writable fields and validate values
+  function mapToNocolyFields(extracted = {}) {
+    const fields = [];
+
+    const allowedTravelTypes = [
+      "ไปราชการในราชอาณาจักร",
+      "ไปราชการต่างประเทศชั่วคราว",
+      "ไปราชการประจำในต่างประเทศ",
+    ];
+    const allowedCountryTypes = [
+      "ประเภท ก",
+      "ประเภท ข",
+      "Option 3",
+      "ประเภท ค",
+      "ประเภท ง",
+      "ประเภท จ",
+    ];
+    const allowedReimbursement = ["เหมาจ่าย", "จ่ายจริง", "Option 3"];
+
+    function normalizeDate(d) {
+      if (!d) return null;
+      // Accept already normalized 'YYYY-M-D'
+      const ymd = /^(\d{4})-(\d{1,2})-(\d{1,2})$/;
+      const dmy = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/;
+      const dmydash = /^(\d{1,2})-(\d{1,2})-(\d{4})$/;
+      let m;
+      if (ymd.test(d)) return d;
+      if ((m = d.match(dmy)))
+        return `${m[3]}-${parseInt(m[2], 10)}-${parseInt(m[1], 10)}`;
+      if ((m = d.match(dmydash)))
+        return `${m[3]}-${parseInt(m[2], 10)}-${parseInt(m[1], 10)}`;
+      return null;
+    }
+
+    if (extracted.purpose) {
+      fields.push({
+        id: "69d4ee2dfa7982b82bd766a2",
+        value: String(extracted.purpose),
+      });
+    }
+
+    if (
+      extracted.travelType &&
+      allowedTravelTypes.includes(extracted.travelType)
+    ) {
+      fields.push({
+        id: "69d4ee2dfa7982b82bd766a3",
+        value: extracted.travelType,
+      });
+    }
+
+    if (
+      extracted.countryType &&
+      allowedCountryTypes.includes(extracted.countryType)
+    ) {
+      fields.push({
+        id: "69d4ee2dfa7982b82bd766a4",
+        value: extracted.countryType,
+      });
+    }
+
+    if (extracted.destination) {
+      fields.push({
+        id: "69d4ee2dfa7982b82bd766a5",
+        value: String(extracted.destination),
+      });
+    }
+
+    const s = normalizeDate(extracted.startDate);
+    const e = normalizeDate(extracted.endDate);
+    if (s) fields.push({ id: "69d4ee2dfa7982b82bd766a6", value: s });
+    if (e) fields.push({ id: "69d4ee2dfa7982b82bd766a7", value: e });
+
+    if (
+      extracted.reimbursementType &&
+      allowedReimbursement.includes(extracted.reimbursementType)
+    ) {
+      fields.push({
+        id: "69d4eff3212d613b07e64600",
+        value: extracted.reimbursementType,
+      });
+    }
+
+    if (extracted.extraField) {
+      fields.push({
+        id: "69d5ff17360586f58a4c374b",
+        value: extracted.extraField,
+      });
+    }
+
+    if (typeof extracted.travelTotal === "number") {
+      fields.push({
+        id: "69d5da34212d613b07e680cb",
+        value: extracted.travelTotal,
+      });
+    }
+    if (typeof extracted.accommodationTotal === "number") {
+      fields.push({
+        id: "69d5da34212d613b07e680cc",
+        value: extracted.accommodationTotal,
+      });
+    }
+    if (typeof extracted.clothingTotal === "number") {
+      fields.push({
+        id: "69d5da34212d613b07e680cd",
+        value: extracted.clothingTotal,
+      });
+    }
+
+    return fields;
+  }
+
+  // Decide if user's intent is to create a Nocoly record
+  function shouldCreateRecord(
+    question = "",
+    chatHistory = [],
+    analysis = null,
+  ) {
+    const q = (question || "").toLowerCase();
+    const keywords = [
+      "สร้าง",
+      "สร้างคำขอ",
+      "สร้างรายการ",
+      "ส่ง",
+      "ยื่น",
+      "บันทึก",
+      "submit",
+      "create",
+      "create request",
+      "new record",
+    ];
+    if (keywords.some((k) => q.includes(k))) return true;
+
+    // If analysis indicates complete data and user asks about 'proceed' or 'next'
+    if (analysis && analysis.isComplete) {
+      const proceedKeywords = ["ต่อไป", "ดำเนินการ", "proceed", "submit"];
+      if (proceedKeywords.some((k) => q.includes(k))) return true;
+    }
+
+    return false;
+  }
+
+  // Create a new record in Nocoly using the provided fields array
+  async function createNocolyRecord(fields = []) {
+    try {
+      if (!Array.isArray(fields) || fields.length === 0) {
+        throw new Error("No writable fields provided for Nocoly payload");
+      }
+
+      setProcessingStep("Submitting request to Nocoly...");
+
+      const myHeaders = new Headers();
+      myHeaders.append("HAP-Appkey", "0267badb903abfa0");
+      myHeaders.append(
+        "HAP-Sign",
+        "YTFiMzE5ZDk4NDBmNDNmNjllOWMxYjU4MWY2YTQ5ZTQwNTU3MmMzZmM2MWZmM2JmOWYwNjYwY2U2OTk3YWJmNw==",
+      );
+      myHeaders.append("Content-Type", "application/json");
+
+      const raw = JSON.stringify({ triggerWorkflow: true, fields });
+
+      const requestOptions = {
+        method: "POST",
+        headers: myHeaders,
+        body: raw,
+        redirect: "follow",
+      };
+
+      const url =
+        "https://www.nocoly.com/api/v3/app/worksheets/69d4b45ffa7982b82bd74399/rows";
+
+      const resp = await fetch(url, requestOptions);
+      const text = await resp.text();
+      if (!resp.ok) {
+        console.error("Nocoly API error", resp.status, text);
+        return { success: false, error: `HTTP ${resp.status}: ${text}` };
+      }
+
+      return { success: true, result: text };
+    } catch (err) {
+      console.error("createNocolyRecord failed:", err.message || err);
+      return { success: false, error: err.message || String(err) };
+    } finally {
+      setProcessingStep("");
+    }
+  }
+
   /**
    * Send message handler with short memory (session-only)
    * - Messages stored in React state only (not persistent)
@@ -435,6 +754,76 @@ function App() {
         console.log("[4] ⚠️  NO documents passed the relevance threshold!");
       }
 
+      // Analyze the accumulated chat log JSON for trip extraction and intent
+      const analysis = analyzeChatLog(chatHistory);
+      console.log("[ANALYSIS] Extracted trip data:", analysis);
+
+      // If user intends to create a Nocoly record, handle that flow first
+      const wantsCreate = shouldCreateRecord(question, chatHistory, analysis);
+      if (wantsCreate) {
+        console.log("[FLOW] Create record intent detected");
+        if (!analysis.isComplete) {
+          // Ask for missing information
+          const missingList = analysis.missing.join(", ");
+          const isThai = String(detectedLanguage || "")
+            .toLowerCase()
+            .includes("thai");
+          const askText = isThai
+            ? `ยังขาดข้อมูล: ${missingList}. กรุณาให้ข้อมูลเพิ่มเติม.`
+            : `Missing fields: ${missingList}. Please provide them.`;
+
+          return [
+            {
+              text: askText,
+              sender: "ai",
+              role: "assistant",
+              timestamp: new Date().toISOString(),
+              animate: true,
+            },
+          ];
+        }
+
+        // Map extracted values to Nocoly writable fields
+        setProcessingStep("Preparing Nocoly payload...");
+        const nocolyFields = mapToNocolyFields(analysis.extracted);
+        if (!nocolyFields || nocolyFields.length === 0) {
+          return [
+            {
+              text: "ไม่พบข้อมูลที่สามารถแมปเป็นฟิลด์คำขอได้ โปรดระบุรายละเอียดเพิ่มเติม",
+              sender: "ai",
+              role: "assistant",
+              timestamp: new Date().toISOString(),
+              animate: true,
+            },
+          ];
+        }
+
+        setProcessingStep("Submitting to Nocoly...");
+        const createResult = await createNocolyRecord(nocolyFields);
+        if (createResult.success) {
+          const confirmText = `The request form has been created successfully. Please check the system again.`;
+          return [
+            {
+              text: confirmText,
+              sender: "ai",
+              role: "assistant",
+              timestamp: new Date().toISOString(),
+              animate: true,
+            },
+          ];
+        }
+
+        return [
+          {
+            text: `Failed to create request: ${createResult.error || "Unknown error"}`,
+            sender: "ai",
+            role: "assistant",
+            timestamp: new Date().toISOString(),
+            animate: true,
+          },
+        ];
+      }
+
       // Step 4: Build optimized instruction prompt with context awareness
       // Use recent user questions for better context understanding (faster response)
       const recentQuestions = chatHistory
@@ -521,7 +910,7 @@ ${
 
       const responses = [mainResponse];
 
-      if (ENABLE_TOKEN_LOGGING) {
+      if (tokenLoggingEnabled) {
         const tokenLogMessage = {
           text:
             `**Token Usage Report:**\n\n` +
@@ -695,14 +1084,21 @@ ${
     `;
 
     try {
-      console.log("   → Querying Weaviate (limit: 15)...");
+      const base = (WEAVIATE_ENDPOINT || "")
+        .toString()
+        .trim()
+        .replace(/\/+$/, "");
+      if (!base) throw new Error("REACT_APP_WEAVIATE_ENDPOINT is not set.");
+      const url = `${base}/v1/graphql`;
+      console.log("   → Querying Weaviate:", url);
 
-      const response = await fetch(`${WEAVIATE_ENDPOINT}/v1/graphql`, {
+      const headers = { "Content-Type": "application/json" };
+      if (WEAVIATE_API_KEY)
+        headers.Authorization = `Bearer ${WEAVIATE_API_KEY}`;
+
+      const response = await fetch(url, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${WEAVIATE_API_KEY}`,
-        },
+        headers,
         body: JSON.stringify({ query: gql }),
       });
 
@@ -730,9 +1126,7 @@ ${
           const certainty = r._additional?.certainty || 0;
           const topic = r.documentTopic || "No topic";
           console.log(
-            `      ${i + 1}. ${(certainty * 100).toFixed(
-              1,
-            )}% - "${topic.substring(0, 50)}"`,
+            `      ${i + 1}. ${(certainty * 100).toFixed(1)}% - "${topic.substring(0, 50)}"`,
           );
         });
       }
@@ -755,8 +1149,8 @@ ${
 
       return finalResults;
     } catch (err) {
-      console.error("   ✗ Weaviate search failed:", err.message);
-      throw new Error(`Weaviate search failed: ${err.message}`);
+      console.error("   ✗ Weaviate search failed:", err.message || err);
+      throw new Error(`Weaviate search failed: ${err.message || String(err)}`);
     }
   }
 

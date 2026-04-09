@@ -1,16 +1,25 @@
 const path = require("path");
 const HtmlWebpackPlugin = require("html-webpack-plugin");
-const webpack = require('webpack');
-const dotenv = require('dotenv');
+const webpack = require("webpack");
+const dotenv = require("dotenv");
 
-// Load environment variables from .env file
-const env = dotenv.config().parsed;
+// Load environment variables from .env file (safe: fallback to empty object)
+const dotenvResult = dotenv.config();
+const env = (dotenvResult && dotenvResult.parsed) || {};
 
-// Create an object to define environment variables for the client
+// Create an object to define environment variables for the client (DefinePlugin expects key-value)
 const envKeys = Object.keys(env).reduce((prev, next) => {
   prev[`process.env.${next}`] = JSON.stringify(env[next]);
   return prev;
 }, {});
+
+if (!Object.keys(env).length) {
+  console.warn(
+    "[webpack] No .env file found or it is empty — proceeding with empty env.",
+  );
+} else {
+  console.log("[webpack] Injecting env keys:", Object.keys(env).join(", "));
+}
 
 module.exports = {
   entry: "./src/index.js",
@@ -51,7 +60,12 @@ module.exports = {
     new HtmlWebpackPlugin({
       template: "src/index.html",
     }),
-    new webpack.DefinePlugin(envKeys),
+    // DefinePlugin: inject environment variables into client build
+    new webpack.DefinePlugin({
+      ...envKeys,
+      // Also expose a single object for runtime checks: window.__ENV__
+      "window.__ENV__": JSON.stringify(env || {}),
+    }),
   ],
 
   resolve: {
