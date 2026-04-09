@@ -114,14 +114,35 @@ ALWAYS respond in the SAME language as the user's latest message.
 
 【Conversation Modes】
 INFO: User is asking questions → answer naturally, thoroughly, and continue the conversation
-GATHERING: User wants to create a request but details are missing → smoothly ask only for what is still missing
-READY_TO_CREATE: All required trip details are present in the conversation → suggest creating the request
+GATHERING: User wants to create a request but details are missing → smoothly ask for missing fields; for every dropdown field ALWAYS list all available options in the chat so the user can pick one clearly
+READY_TO_CREATE: ALL 8 required fields below are present in the conversation → suggest creating the request
 
-【Required fields for a reimbursement request】
-- purpose (วัตถุประสงค์การเดินทาง)
-- destination (สถานที่ปฏิบัติงาน/ไปราชการ)
-- startDate (วันที่เดินทางไป)
-- endDate (วันที่เดินทางกลับ)
+【Required fields for a reimbursement request — ALL 8 must be collected】
+1. purpose — วัตถุประสงค์การเดินทาง (free text)
+2. travelType — ประเภทการเดินทาง (dropdown — when asking, list these options):
+   • ไปราชการในราชอาณาจักร
+   • ไปราชการต่างประเทศชั่วคราว
+   • ไปราชการประจำในต่างประเทศ
+3. countryType — ประเทศ/ประเภทประเทศ (dropdown — when asking, list these options):
+   • ประเภท ก
+   • ประเภท ข
+   • Option 3
+   • ประเภท ค
+   • ประเภท ง
+   • ประเภท จ
+4. destination — สถานที่ไปราชการ (free text)
+5. startDate — วันเริ่มเดินทาง (date, YYYY-M-D format)
+6. endDate — วันสิ้นสุดการเดินทาง (date, YYYY-M-D format)
+7. claimType — ประเภทการเบิกเงิน (dropdown — when asking, list these options):
+   • เหมาจ่าย
+   • จ่ายจริง
+   • Option 3
+8. governmentRole — ประเภทผู้เดินทาง (free text, e.g. ข้าราชการ ก, ข้าราชการ ข)
+
+【GATHERING guidance】
+- Group multiple missing fields into one message when natural (e.g., ask for dates together)
+- For every dropdown field that is missing, ALWAYS display the full list of options in the same message
+- Never ask the user to repeat information they have already provided in the conversation
 
 【Output Format — MANDATORY】
 Return ONLY valid JSON, nothing outside JSON:
@@ -137,7 +158,7 @@ Return ONLY valid JSON, nothing outside JSON:
 
 Rules:
 - answer: Write naturally and helpfully. Do NOT start with "พบเอกสาร", "จากข้อมูลใน KB", "Based on the documents", "From the knowledge base".
-- conversationState: "INFO" for Q&A, "GATHERING" while collecting trip details, "READY_TO_CREATE" when all required fields (purpose, destination, startDate, endDate) are present in the conversation
+- conversationState: "INFO" for Q&A, "GATHERING" while collecting trip details, "READY_TO_CREATE" only when ALL 8 required fields (purpose, travelType, countryType, destination, startDate, endDate, claimType, governmentRole) are present in the conversation
 - missingFields: List field names only when conversationState is "GATHERING"
 - Output MUST be valid JSON immediately. No extra text outside JSON.`;
 
@@ -467,7 +488,16 @@ function App() {
       extraField,
     };
 
-    const required = ["purpose", "startDate", "endDate", "destination"];
+    const required = [
+      "purpose",
+      "travelType",
+      "countryType",
+      "destination",
+      "startDate",
+      "endDate",
+      "reimbursementType",
+      "extraField",
+    ];
     const missing = required.filter((k) => !extracted[k]);
 
     return {
@@ -521,7 +551,16 @@ function App() {
 
       const data = await response.json();
       const extracted = JSON.parse(data.choices[0].message.content);
-      const required = ["purpose", "startDate", "endDate", "destination"];
+      const required = [
+        "purpose",
+        "travelType",
+        "countryType",
+        "destination",
+        "startDate",
+        "endDate",
+        "reimbursementType",
+        "extraField",
+      ];
       const missing = required.filter((k) => !extracted[k]);
       console.log("[LLM Extraction] Result:", extracted);
       console.log("[LLM Extraction] Missing:", missing);
@@ -689,6 +728,24 @@ function App() {
     return false;
   }
 
+  // ===== Integration Target Configuration =====
+  // Switch between N8N (default) and Nocoly by changing ACTIVE_INTEGRATION_TARGET.
+  // N8N is the default because Nocoly currently blocks browser requests with a CORS error.
+  // To re-enable Nocoly, change the value below to "nocoly".
+  const ACTIVE_INTEGRATION_TARGET = "n8n"; // "n8n" | "nocoly"
+
+  const N8N_WEBHOOK_URL =
+    "https://vbix.app.n8n.cloud/webhook/e4941e4b-4f17-4e7d-9af8-4a59c80a7b74";
+
+  /**
+   * Returns the currently configured integration target.
+   * Centralises the target decision so callers never need to check the constant directly.
+   * @returns {"n8n" | "nocoly"}
+   */
+  function getActiveIntegrationTarget() {
+    return ACTIVE_INTEGRATION_TARGET;
+  }
+
   // Create a new record in Nocoly using the provided fields array
   async function createNocolyRecord(fields = []) {
     try {
@@ -732,6 +789,77 @@ function App() {
     } finally {
       setProcessingStep("");
     }
+  }
+
+  /**
+   * Submit reimbursement request via N8N webhook.
+   * The N8N workflow receives the full mapped-fields payload and handles
+   * downstream integration with Nocoly server-side (no browser CORS restriction).
+   *
+   * @param {Array} fields - Nocoly-mapped field array produced by mapToNocolyFields()
+   * @returns {{ success: boolean, result?: string, error?: string }}
+   */
+  async function submitViaN8N(fields = []) {
+    try {
+      if (!Array.isArray(fields) || fields.length === 0) {
+        throw new Error("No fields provided for N8N payload");
+      }
+
+      setProcessingStep("กำลังส่งคำขอผ่าน N8N...");
+      console.log("[N8N] Submitting", fields.length, "fields to webhook");
+
+      const resp = await fetch(N8N_WEBHOOK_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ triggerWorkflow: true, fields }),
+      });
+
+      const text = await resp.text();
+      if (!resp.ok) {
+        console.error("[N8N] API error", resp.status, text);
+        return { success: false, error: `HTTP ${resp.status}: ${text}` };
+      }
+
+      console.log("[N8N] Submission successful");
+      return { success: true, result: text };
+    } catch (err) {
+      console.error("[N8N] submitViaN8N failed:", err.message || err);
+      return { success: false, error: err.message || String(err) };
+    } finally {
+      setProcessingStep("");
+    }
+  }
+
+  /**
+   * Integration resolver — routes the reimbursement request to the correct backend.
+   * Checks getActiveIntegrationTarget() and delegates to the appropriate function.
+   *
+   * Default target: N8N   (Nocoly is blocked by CORS from the browser)
+   * Future target:  Nocoly (re-enable by setting ACTIVE_INTEGRATION_TARGET = "nocoly")
+   *
+   * @param {Array} fields - Nocoly-mapped field array produced by mapToNocolyFields()
+   * @returns {{ success: boolean, target: string, result?: string, error?: string }}
+   */
+  async function submitReimbursementRequest(fields = []) {
+    const target = getActiveIntegrationTarget();
+    console.log(`[Integration] Active target: ${target}`);
+
+    if (target === "n8n") {
+      const result = await submitViaN8N(fields);
+      return { ...result, target: "n8n" };
+    }
+
+    if (target === "nocoly") {
+      const result = await createNocolyRecord(fields);
+      return { ...result, target: "nocoly" };
+    }
+
+    console.error("[Integration] Unknown target:", target);
+    return {
+      success: false,
+      target,
+      error: `Unknown integration target: "${target}". Valid values are "n8n" or "nocoly".`,
+    };
   }
 
   /**
@@ -798,9 +926,9 @@ function App() {
         );
         const fieldsToSubmit = pendingNocolyFieldsRef.current;
         pendingNocolyFieldsRef.current = null;
-        const createResult = await createNocolyRecord(fieldsToSubmit);
+        const createResult = await submitReimbursementRequest(fieldsToSubmit);
         const text = createResult.success
-          ? "\u2705 **\u0e2a\u0e23\u0e49\u0e32\u0e07\u0e04\u0e33\u0e02\u0e2d\u0e40\u0e1a\u0e34\u0e01\u0e04\u0e48\u0e32\u0e43\u0e0a\u0e49\u0e08\u0e48\u0e32\u0e22\u0e40\u0e23\u0e35\u0e22\u0e1a\u0e23\u0e49\u0e2d\u0e22\u0e41\u0e25\u0e49\u0e27\u0e04\u0e23\u0e31\u0e1a!** \u0e01\u0e23\u0e38\u0e13\u0e32\u0e15\u0e23\u0e27\u0e08\u0e2a\u0e2d\u0e1a\u0e41\u0e25\u0e30\u0e22\u0e37\u0e19\u0e22\u0e31\u0e19\u0e02\u0e49\u0e2d\u0e21\u0e39\u0e25\u0e2d\u0e35\u0e01\u0e04\u0e23\u0e31\u0e49\u0e07\u0e43\u0e19\u0e23\u0e30\u0e1a\u0e1a Nocoly \u0e19\u0e30\u0e04\u0e23\u0e31\u0e1a \ud83d\ude0a"
+          ? "\u2705 **\u0e2a\u0e23\u0e49\u0e32\u0e07\u0e04\u0e33\u0e02\u0e2d\u0e40\u0e1a\u0e34\u0e01\u0e04\u0e48\u0e32\u0e43\u0e0a\u0e49\u0e08\u0e48\u0e32\u0e22\u0e40\u0e23\u0e35\u0e22\u0e1a\u0e23\u0e49\u0e2d\u0e22\u0e41\u0e25\u0e49\u0e27\u0e04\u0e23\u0e31\u0e1a!** \u0e01\u0e23\u0e38\u0e13\u0e32\u0e15\u0e23\u0e27\u0e08\u0e2a\u0e2d\u0e1a\u0e41\u0e25\u0e30\u0e22\u0e37\u0e19\u0e22\u0e31\u0e19\u0e02\u0e49\u0e2d\u0e21\u0e39\u0e25\u0e2d\u0e35\u0e01\u0e04\u0e23\u0e31\u0e49\u0e07\u0e43\u0e19\u0e23\u0e30\u0e1a\u0e1a\u0e19\u0e30\u0e04\u0e23\u0e31\u0e1a \ud83d\ude0a"
           : `\u0e02\u0e2d\u0e2d\u0e20\u0e31\u0e22\u0e04\u0e23\u0e31\u0e1a \u0e44\u0e21\u0e48\u0e2a\u0e32\u0e21\u0e32\u0e23\u0e16\u0e2a\u0e48\u0e07\u0e04\u0e33\u0e02\u0e2d\u0e44\u0e14\u0e49\u0e43\u0e19\u0e02\u0e13\u0e30\u0e19\u0e35\u0e49 (${createResult.error || "Unknown error"}) \u0e01\u0e23\u0e38\u0e13\u0e32\u0e25\u0e2d\u0e07\u0e43\u0e2b\u0e21\u0e48\u0e2d\u0e35\u0e01\u0e04\u0e23\u0e31\u0e49\u0e07\u0e2b\u0e23\u0e37\u0e2d\u0e15\u0e34\u0e14\u0e15\u0e48\u0e2d\u0e1c\u0e39\u0e49\u0e14\u0e39\u0e41\u0e25\u0e23\u0e30\u0e1a\u0e1a`;
         aiResponses = [
           {
@@ -976,18 +1104,14 @@ function App() {
               : analysis;
 
         const fieldLabels = {
-          purpose: isThai
-            ? "\u0e27\u0e31\u0e15\u0e16\u0e38\u0e1b\u0e23\u0e30\u0e2a\u0e07\u0e04\u0e4c\u0e01\u0e32\u0e23\u0e40\u0e14\u0e34\u0e19\u0e17\u0e32\u0e07"
-            : "trip purpose",
-          destination: isThai
-            ? "\u0e2a\u0e16\u0e32\u0e19\u0e17\u0e35\u0e48\u0e1b\u0e0f\u0e34\u0e1a\u0e31\u0e15\u0e34\u0e07\u0e32\u0e19"
-            : "destination",
-          startDate: isThai
-            ? "\u0e27\u0e31\u0e19\u0e17\u0e35\u0e48\u0e40\u0e14\u0e34\u0e19\u0e17\u0e32\u0e07\u0e44\u0e1b"
-            : "departure date",
-          endDate: isThai
-            ? "\u0e27\u0e31\u0e19\u0e17\u0e35\u0e48\u0e40\u0e14\u0e34\u0e19\u0e17\u0e32\u0e07\u0e01\u0e25\u0e31\u0e1a"
-            : "return date",
+          purpose: isThai ? "วัตถุประสงค์การเดินทาง" : "trip purpose",
+          travelType: isThai ? "ประเภทการเดินทาง" : "travel type",
+          countryType: isThai ? "ประเทศ/ประเภทประเทศ" : "country type",
+          destination: isThai ? "สถานที่ไปราชการ" : "destination",
+          startDate: isThai ? "วันเริ่มเดินทาง" : "departure date",
+          endDate: isThai ? "วันสิ้นสุดการเดินทาง" : "return date",
+          reimbursementType: isThai ? "ประเภทการเบิกเงิน" : "claim type",
+          extraField: isThai ? "ประเภทผู้เดินทาง" : "traveller role",
         };
 
         if (!finalAnalysis.isComplete) {
@@ -1030,24 +1154,18 @@ function App() {
         // Build a readable summary of what will be submitted
         const ex = finalAnalysis.extracted;
         const summaryLines = [
-          ex.purpose
-            ? `- **\u0e27\u0e31\u0e15\u0e16\u0e38\u0e1b\u0e23\u0e30\u0e2a\u0e07\u0e04\u0e4c:** ${ex.purpose}`
+          ex.purpose ? `- **วัตถุประสงค์:** ${ex.purpose}` : null,
+          ex.travelType ? `- **ประเภทการเดินทาง:** ${ex.travelType}` : null,
+          ex.countryType
+            ? `- **ประเทศ/ประเภทประเทศ:** ${ex.countryType}`
             : null,
-          ex.destination
-            ? `- **\u0e2a\u0e16\u0e32\u0e19\u0e17\u0e35\u0e48:** ${ex.destination}`
-            : null,
-          ex.startDate
-            ? `- **\u0e27\u0e31\u0e19\u0e40\u0e14\u0e34\u0e19\u0e17\u0e32\u0e07\u0e44\u0e1b:** ${ex.startDate}`
-            : null,
-          ex.endDate
-            ? `- **\u0e27\u0e31\u0e19\u0e40\u0e14\u0e34\u0e19\u0e17\u0e32\u0e07\u0e01\u0e25\u0e31\u0e1a:** ${ex.endDate}`
-            : null,
-          ex.travelType
-            ? `- **\u0e1b\u0e23\u0e30\u0e40\u0e20\u0e17\u0e01\u0e32\u0e23\u0e40\u0e14\u0e34\u0e19\u0e17\u0e32\u0e07:** ${ex.travelType}`
-            : null,
+          ex.destination ? `- **สถานที่ไปราชการ:** ${ex.destination}` : null,
+          ex.startDate ? `- **วันเริ่มเดินทาง:** ${ex.startDate}` : null,
+          ex.endDate ? `- **วันสิ้นสุดการเดินทาง:** ${ex.endDate}` : null,
           ex.reimbursementType
-            ? `- **\u0e1b\u0e23\u0e30\u0e40\u0e20\u0e17\u0e01\u0e32\u0e23\u0e40\u0e1a\u0e34\u0e01:** ${ex.reimbursementType}`
+            ? `- **ประเภทการเบิกเงิน:** ${ex.reimbursementType}`
             : null,
+          ex.extraField ? `- **ประเภทผู้เดินทาง:** ${ex.extraField}` : null,
         ]
           .filter(Boolean)
           .join("\n");
