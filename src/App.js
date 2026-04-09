@@ -37,11 +37,11 @@ const ENABLE_RELATED_DOCUMENTS = false; // set true to show Related Documents pa
 const ENABLE_STREAMING_EFFECT = true;
 const ENABLE_PROCESSING_ANIMATION = true;
 
-// ===== Suggested Questions (HR-based) =====
+// ===== Suggested Questions (Travel Reimbursement) =====
 const SUGGESTED_QUESTIONS = [
-  "นโยบายการลา",
-  "การเบิกค่ารักษาพยาบาล",
-  "ขั้นตอนการขออนุมัติ",
+  "ค่าใช้จ่ายในการเดินทางไปราชการมีอะไรบ้าง",
+  "อัตราค่าเบี้ยเลี้ยงและค่าที่พักเป็นเท่าไหร่",
+  "วิธีเบิกค่าใช้จ่ายการเดินทางทำอย่างไร",
 ];
 
 // ===== HR Document Search JSON Schema (MANDATORY) =====
@@ -83,33 +83,85 @@ const HR_RESPONSE_SCHEMA = {
   required: ["hasRelevantDocument", "answer", "referenceDocuments"],
 };
 
-// ===== System Prompt (LLM MUST OUTPUT THAI) =====
-const SYSTEM_PROMPT = `You are an HR Assistant for the organization.
-Your role: Answer employee questions about company policies, benefits, and regulations by accurately referencing HR documents.
+// ===== System Prompt — Travel Reimbursement AI =====
+const SYSTEM_PROMPT = `You are a knowledgeable, friendly, and helpful AI assistant specializing in government travel expense reimbursement (ค่าใช้จ่ายในการเดินทางไปราชการ).
 
-【Response Method】
-1. **Identify the language of the user's question.** You MUST answer in the SAME language as the user's question.
-   - If the user asks in English, answer in English.
-   - If the user asks in Thai, answer in Thai.
-2. Read conversation history to clearly understand the context and what the user is specifically asking.
-3. Review ONLY the provided documents - if documents are relevant to the question, use them as reference.
-4. Write specific answers citing information directly from the documents.
-5. **Do NOT summarize or shorten the information.** Provide full details as found in the documents.
-6. **Organize and explain the information** clearly, acting as an advisor explaining the policy based on the data.
+【Your Role】
+Help government employees with travel reimbursement:
+- Explain reimbursement policies, rates, and eligibility in a clear and natural way
+- Answer follow-up questions using full conversation context — users should never need to repeat themselves
+- Guide users through collecting required trip details when they want to create a request
+- Assist in submitting reimbursement requests once all details are ready
 
-【Document Referencing Rules】
-- ONLY reference documents that directly answer the question.
-- If document topic/description does NOT match the question → do NOT use it.
-- If NO documents match → return hasRelevantDocument = false.
-- Be strict and precise - better to say "no documents found" than give wrong information.
+【Language Rule — CRITICAL】
+ALWAYS respond in the SAME language as the user's latest message.
+- User writes Thai → respond entirely in Thai
+- User writes English → respond entirely in English
+- NEVER mix Thai and English in a single response
 
-【Prohibitions】
-- Do NOT guess or provide generic answers.
-- Do NOT reference unrelated documents.
-- Do NOT add information from outside the Knowledge Base.
-- Never start with: "พบเอกสาร", "จากข้อมูลใน KB", "อ้างอิงจากเอกสาร".
-- Output MUST be valid JSON immediately.
-- **Do NOT mix languages.** Keep the response in the single language of the user's question.`;
+【Conversation Style — Be Natural Like ChatGPT/Gemini】
+- Sound warm, conversational, and professional — like a knowledgeable colleague, not a rules engine
+- Use the full conversation history to understand context and avoid redundancy
+- Answer follow-up questions intelligently without asking users to repeat prior details
+- Explain policies naturally with bullet points or numbered steps where helpful
+- Do NOT robotically quote raw document text — synthesize and explain it clearly
+- Do NOT sound like a database query result
+
+【Knowledge Base Rules】
+- Use ONLY the provided documents to answer policy questions
+- Do NOT invent rules, rates, or procedures not found in the documents
+- If no relevant documents exist, say so honestly and suggest the user contact the responsible department
+
+【Conversation Modes】
+INFO: User is asking questions → answer naturally, thoroughly, and continue the conversation
+GATHERING: User wants to create a request but details are missing → smoothly ask only for what is still missing
+READY_TO_CREATE: All required trip details are present in the conversation → suggest creating the request
+
+【Required fields for a reimbursement request】
+- purpose (วัตถุประสงค์การเดินทาง)
+- destination (สถานที่ปฏิบัติงาน/ไปราชการ)
+- startDate (วันที่เดินทางไป)
+- endDate (วันที่เดินทางกลับ)
+
+【Output Format — MANDATORY】
+Return ONLY valid JSON, nothing outside JSON:
+{
+  "hasRelevantDocument": boolean,
+  "answer": "Natural, warm, conversational response in user's language",
+  "conversationState": "INFO" | "GATHERING" | "READY_TO_CREATE",
+  "referenceDocuments": [
+    { "instanceID": "...", "documentTopic": "...", "documentDescription": "..." }
+  ],
+  "missingFields": []
+}
+
+Rules:
+- answer: Write naturally and helpfully. Do NOT start with "พบเอกสาร", "จากข้อมูลใน KB", "Based on the documents", "From the knowledge base".
+- conversationState: "INFO" for Q&A, "GATHERING" while collecting trip details, "READY_TO_CREATE" when all required fields (purpose, destination, startDate, endDate) are present in the conversation
+- missingFields: List field names only when conversationState is "GATHERING"
+- Output MUST be valid JSON immediately. No extra text outside JSON.`;
+
+// ===== LLM-based Trip Data Extraction Prompt =====
+const EXTRACTION_SYSTEM_PROMPT = `You are a precise data extraction assistant. Extract travel reimbursement request details from a conversation log.
+
+Extract these fields:
+- purpose: String — purpose/reason for the trip (\u0e27\u0e31\u0e15\u0e16\u0e38\u0e1b\u0e23\u0e30\u0e2a\u0e07\u0e04\u0e4c\u0e01\u0e32\u0e23\u0e40\u0e14\u0e34\u0e19\u0e17\u0e32\u0e07). Null if not mentioned.
+- destination: String — destination/location of the trip (\u0e2a\u0e16\u0e32\u0e19\u0e17\u0e35\u0e48\u0e1b\u0e0f\u0e34\u0e1a\u0e31\u0e15\u0e34\u0e07\u0e32\u0e19). Null if not mentioned.
+- startDate: String — departure date in YYYY-MM-DD format. Null if not mentioned.
+- endDate: String — return date in YYYY-MM-DD format. Null if not mentioned.
+- travelType: One of ["\u0e44\u0e1b\u0e23\u0e32\u0e0a\u0e01\u0e32\u0e23\u0e43\u0e19\u0e23\u0e32\u0e0a\u0e2d\u0e32\u0e13\u0e32\u0e08\u0e31\u0e01\u0e23","\u0e44\u0e1b\u0e23\u0e32\u0e0a\u0e01\u0e32\u0e23\u0e15\u0e48\u0e32\u0e07\u0e1b\u0e23\u0e30\u0e40\u0e17\u0e28\u0e0a\u0e31\u0e48\u0e27\u0e04\u0e23\u0e32\u0e27","\u0e44\u0e1b\u0e23\u0e32\u0e0a\u0e01\u0e32\u0e23\u0e1b\u0e23\u0e30\u0e08\u0e33\u0e43\u0e19\u0e15\u0e48\u0e32\u0e07\u0e1b\u0e23\u0e30\u0e40\u0e17\u0e28"] or null.
+- reimbursementType: One of ["\u0e40\u0e2b\u0e21\u0e32\u0e08\u0e48\u0e32\u0e22","\u0e08\u0e48\u0e32\u0e22\u0e08\u0e23\u0e34\u0e07"] or null.
+- countryType: One of ["\u0e1b\u0e23\u0e30\u0e40\u0e20\u0e17 \u0e01","\u0e1b\u0e23\u0e30\u0e40\u0e20\u0e17 \u0e02","Option 3","\u0e1b\u0e23\u0e30\u0e40\u0e20\u0e17 \u0e04","\u0e1b\u0e23\u0e30\u0e40\u0e20\u0e17 \u0e07","\u0e1b\u0e23\u0e30\u0e40\u0e20\u0e17 \u0e08"] or null.
+- travelTotal: Number — travel expense amount in Thai Baht. Null if not clearly stated.
+- accommodationTotal: Number — accommodation cost in Thai Baht. Null if not clearly stated.
+- clothingTotal: Number — clothing/uniform allowance in Thai Baht. Null if not clearly stated.
+- extraField: String — government official rank if mentioned (e.g. "\u0e02\u0e49\u0e32\u0e23\u0e32\u0e0a\u0e01\u0e32\u0e23 \u0e01"). Null if not mentioned.
+
+Rules:
+- Extract ONLY information explicitly stated in the conversation. Do NOT infer or guess.
+- Return null for any field not clearly stated in the text.
+- Convert any date format (dd/mm/yyyy, dd-mm-yyyy, Thai Buddhist year) to YYYY-MM-DD (Gregorian).
+- Output valid JSON only with no extra text.`;
 
 // ===== Weaviate Collection Configuration =====
 // Use NocolyTripAI as the source for travel reimbursement knowledge
@@ -181,6 +233,8 @@ function App() {
   const [processingStep, setProcessingStep] = useState("");
   const [isDarkMode, setIsDarkMode] = useState(false);
   const messagesEndRef = useRef(null);
+  // Stores mapped Nocoly fields while waiting for user confirmation before submitting
+  const pendingNocolyFieldsRef = useRef(null);
 
   // Conversation persistence and context monitoring
   const [conversationLog, setConversationLog] = useState(() => {
@@ -210,9 +264,10 @@ function App() {
   // -- Conversation logging helpers --
   function buildConversationLog(messagesArray = []) {
     return messagesArray.map((m, i) => ({
+      id: `msg_${i + 1}`,
       seq: i + 1,
       role: m.role || (m.sender === "user" ? "user" : "assistant"),
-      message: m.text,
+      content: m.text,
       timestamp: m.timestamp || new Date().toISOString(),
     }));
   }
@@ -257,30 +312,28 @@ function App() {
     return tokens;
   }
 
-  // -- Simple retrieval decision function (scalable) --
-  // Decides whether to query external knowledge (Weaviate) for a question.
+  // -- Retrieval decision function --
+  // For a travel reimbursement assistant, retrieve knowledge for any substantive
+  // question. Only skip pure greetings or very short acknowledgments.
   function shouldRetrieveFromKnowledgeBase(question = "", chatHistory = []) {
-    const q = (question || "").toLowerCase();
-    const keywords = [
-      "reimburse",
-      "reimbursement",
-      "expense",
-      "claim",
-      "travel",
-      "trip",
-      "allowance",
-      "เบิก",
-      "ค่าใช้จ่าย",
-      "การเดินทาง",
-      "ค่าโดยสาร",
-      "นโยบาย",
-      "นโยบายการ",
-      "เบิกค่าใช้จ่าย",
+    const q = (question || "").trim().toLowerCase();
+    // Skip retrieval for pure greetings / short acknowledgment messages
+    const skipPatterns = [
+      /^(สวัสดี|สวัสดีครับ|สวัสดีค่ะ|hello|hi|hey|hey there)$/,
+      /^(ขอบคุณ|ขอบคุณครับ|ขอบคุณค่ะ|thank|thanks|thank you)$/,
+      /^(โอเค|ใช่|ได้|เข้าใจ|ครับ|ค่ะ|ok|okay|yes|no|ใช่ครับ|ใช่ค่ะ)$/,
     ];
-    if (keywords.some((k) => q.includes(k))) return true;
-    if (q.includes("document") || q.includes("เอกสาร") || q.includes("policy"))
-      return true;
-    return false;
+    if (skipPatterns.some((p) => p.test(q))) return false;
+    // For confirm/cancel keywords on pending submission, skip retrieval
+    const confirmKeywords = ["ยืนยัน", "confirm", "ยกเลิก", "cancel"];
+    if (
+      confirmKeywords.some(
+        (k) => q === k || q === k + "ครับ" || q === k + "ค่ะ",
+      )
+    )
+      return false;
+    // Everything else for this travel reimbursement assistant benefits from retrieval
+    return true;
   }
 
   function copyToClipboard(text) {
@@ -425,7 +478,62 @@ function App() {
     };
   }
 
-  // Map extracted trip data into Nocoly writable fields and validate values
+  /**
+   * LLM-based trip data extraction from full conversation history.
+   * More accurate than regex for natural language conversations.
+   * Falls back to analyzeChatLog (regex) on any error.
+   */
+  async function extractTripDataWithLLM(chatHistory = []) {
+    const conversationText = (chatHistory || [])
+      .map(
+        (m) =>
+          `${m.sender === "user" ? "User" : "Assistant"}: ${(m.text || "").substring(0, 400)}`,
+      )
+      .join("\n");
+
+    try {
+      const response = await fetch(
+        "https://api.openai.com/v1/chat/completions",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${OPENAI_API_KEY}`,
+          },
+          body: JSON.stringify({
+            model: "gpt-4o-mini",
+            temperature: 0,
+            messages: [
+              { role: "system", content: EXTRACTION_SYSTEM_PROMPT },
+              {
+                role: "user",
+                content: `Extract travel reimbursement details from this conversation:\n\n${conversationText}`,
+              },
+            ],
+            response_format: { type: "json_object" },
+          }),
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(`Extraction API error: ${response.status}`);
+      }
+
+      const data = await response.json();
+      const extracted = JSON.parse(data.choices[0].message.content);
+      const required = ["purpose", "startDate", "endDate", "destination"];
+      const missing = required.filter((k) => !extracted[k]);
+      console.log("[LLM Extraction] Result:", extracted);
+      console.log("[LLM Extraction] Missing:", missing);
+      return { extracted, missing, isComplete: missing.length === 0 };
+    } catch (err) {
+      console.warn(
+        "[LLM Extraction] Failed, falling back to regex:",
+        err.message,
+      );
+      return analyzeChatLog(chatHistory);
+    }
+  }
   function mapToNocolyFields(extracted = {}) {
     const fields = [];
 
@@ -548,19 +656,33 @@ function App() {
       "สร้าง",
       "สร้างคำขอ",
       "สร้างรายการ",
-      "ส่ง",
+      "สร้างคำขอเบิก",
+      "ยื่นคำขอ",
+      "ขอเบิก",
+      "เบิกค่าใช้จ่าย",
+      "ส่งคำขอ",
+      "ส่งเรื่อง",
       "ยื่น",
       "บันทึก",
       "submit",
       "create",
       "create request",
       "new record",
+      "file a claim",
+      "file claim",
     ];
     if (keywords.some((k) => q.includes(k))) return true;
 
     // If analysis indicates complete data and user asks about 'proceed' or 'next'
     if (analysis && analysis.isComplete) {
-      const proceedKeywords = ["ต่อไป", "ดำเนินการ", "proceed", "submit"];
+      const proceedKeywords = [
+        "ต่อไป",
+        "ดำเนินการ",
+        "ดำเนินการต่อ",
+        "proceed",
+        "submit",
+        "go ahead",
+      ];
       if (proceedKeywords.some((k) => q.includes(k))) return true;
     }
 
@@ -576,27 +698,18 @@ function App() {
 
       setProcessingStep("Submitting request to Nocoly...");
 
-      const myHeaders = new Headers();
-      myHeaders.append("HAP-Appkey", "0267badb903abfa0");
-      myHeaders.append(
-        "HAP-Sign",
-        "YTFiMzE5ZDk4NDBmNDNmNjllOWMxYjU4MWY2YTQ5ZTQwNTU3MmMzZmM2MWZmM2JmOWYwNjYwY2U2OTk3YWJmNw==",
-      );
-      myHeaders.append("Content-Type", "application/json");
+      // Use the same-origin proxy path so the browser never contacts
+      // www.nocoly.com directly (avoids CORS block).
+      // Local dev : webpack-dev-server proxy forwards to Nocoly server-side.
+      // Vercel    : api/nocoly.js serverless function forwards server-side.
+      const url = "/api/nocoly";
 
-      const raw = JSON.stringify({ triggerWorkflow: true, fields });
-
-      const requestOptions = {
+      const resp = await fetch(url, {
         method: "POST",
-        headers: myHeaders,
-        body: raw,
-        redirect: "follow",
-      };
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ triggerWorkflow: true, fields }),
+      });
 
-      const url =
-        "https://www.nocoly.com/api/v3/app/worksheets/69d4b45ffa7982b82bd74399/rows";
-
-      const resp = await fetch(url, requestOptions);
       const text = await resp.text();
       if (!resp.ok) {
         console.error("Nocoly API error", resp.status, text);
@@ -638,9 +751,79 @@ function App() {
     // Check context size and warn if needed
     checkContextSizeAndWarn(newHistory);
 
-    // Pass full conversation history for LLM context
-    const aiResponse = await handleQuestion(input, newHistory);
-    const aiResponses = Array.isArray(aiResponse) ? aiResponse : [aiResponse];
+    let aiResponses;
+
+    // --- Confirmation flow: handle pending Nocoly submission ---
+    if (pendingNocolyFieldsRef.current) {
+      const q = input.trim().toLowerCase();
+      const confirmKeywords = [
+        "\u0e22\u0e37\u0e19\u0e22\u0e31\u0e19",
+        "confirm",
+        "\u0e15\u0e01\u0e25\u0e07",
+        "yes",
+        "\u0e43\u0e0a\u0e48",
+        "\u0e2a\u0e48\u0e07",
+        "submit",
+        "ok",
+        "okay",
+        "\u0e43\u0e0a\u0e48\u0e04\u0e23\u0e31\u0e1a",
+        "\u0e43\u0e0a\u0e48\u0e04\u0e48\u0e30",
+        "\u0e22\u0e37\u0e19\u0e22\u0e31\u0e19\u0e04\u0e23\u0e31\u0e1a",
+        "\u0e22\u0e37\u0e19\u0e22\u0e31\u0e19\u0e04\u0e48\u0e30",
+        "\u0e14\u0e33\u0e40\u0e19\u0e34\u0e19\u0e01\u0e32\u0e23",
+      ];
+      const cancelKeywords = [
+        "\u0e22\u0e01\u0e40\u0e25\u0e34\u0e01",
+        "cancel",
+        "no",
+        "\u0e44\u0e21\u0e48",
+        "\u0e44\u0e21\u0e48\u0e43\u0e0a\u0e48",
+        "\u0e44\u0e21\u0e48\u0e15\u0e49\u0e2d\u0e07\u0e01\u0e32\u0e23",
+        "\u0e22\u0e01\u0e40\u0e25\u0e34\u0e01\u0e04\u0e23\u0e31\u0e1a",
+        "\u0e22\u0e01\u0e40\u0e25\u0e34\u0e01\u0e04\u0e48\u0e30",
+      ];
+
+      if (confirmKeywords.some((k) => q.includes(k))) {
+        setProcessingStep(
+          "\u0e01\u0e33\u0e25\u0e31\u0e07\u0e2a\u0e48\u0e07\u0e04\u0e33\u0e02\u0e2d\u0e44\u0e1b\u0e22\u0e31\u0e07\u0e23\u0e30\u0e1a\u0e1a...",
+        );
+        const fieldsToSubmit = pendingNocolyFieldsRef.current;
+        pendingNocolyFieldsRef.current = null;
+        const createResult = await createNocolyRecord(fieldsToSubmit);
+        const text = createResult.success
+          ? "\u2705 **\u0e2a\u0e23\u0e49\u0e32\u0e07\u0e04\u0e33\u0e02\u0e2d\u0e40\u0e1a\u0e34\u0e01\u0e04\u0e48\u0e32\u0e43\u0e0a\u0e49\u0e08\u0e48\u0e32\u0e22\u0e40\u0e23\u0e35\u0e22\u0e1a\u0e23\u0e49\u0e2d\u0e22\u0e41\u0e25\u0e49\u0e27\u0e04\u0e23\u0e31\u0e1a!** \u0e01\u0e23\u0e38\u0e13\u0e32\u0e15\u0e23\u0e27\u0e08\u0e2a\u0e2d\u0e1a\u0e41\u0e25\u0e30\u0e22\u0e37\u0e19\u0e22\u0e31\u0e19\u0e02\u0e49\u0e2d\u0e21\u0e39\u0e25\u0e2d\u0e35\u0e01\u0e04\u0e23\u0e31\u0e49\u0e07\u0e43\u0e19\u0e23\u0e30\u0e1a\u0e1a Nocoly \u0e19\u0e30\u0e04\u0e23\u0e31\u0e1a \ud83d\ude0a"
+          : `\u0e02\u0e2d\u0e2d\u0e20\u0e31\u0e22\u0e04\u0e23\u0e31\u0e1a \u0e44\u0e21\u0e48\u0e2a\u0e32\u0e21\u0e32\u0e23\u0e16\u0e2a\u0e48\u0e07\u0e04\u0e33\u0e02\u0e2d\u0e44\u0e14\u0e49\u0e43\u0e19\u0e02\u0e13\u0e30\u0e19\u0e35\u0e49 (${createResult.error || "Unknown error"}) \u0e01\u0e23\u0e38\u0e13\u0e32\u0e25\u0e2d\u0e07\u0e43\u0e2b\u0e21\u0e48\u0e2d\u0e35\u0e01\u0e04\u0e23\u0e31\u0e49\u0e07\u0e2b\u0e23\u0e37\u0e2d\u0e15\u0e34\u0e14\u0e15\u0e48\u0e2d\u0e1c\u0e39\u0e49\u0e14\u0e39\u0e41\u0e25\u0e23\u0e30\u0e1a\u0e1a`;
+        aiResponses = [
+          {
+            text,
+            sender: "ai",
+            role: "assistant",
+            animate: true,
+            timestamp: new Date().toISOString(),
+          },
+        ];
+      } else if (cancelKeywords.some((k) => q.includes(k))) {
+        pendingNocolyFieldsRef.current = null;
+        aiResponses = [
+          {
+            text: "\u0e22\u0e01\u0e40\u0e25\u0e34\u0e01\u0e01\u0e32\u0e23\u0e2a\u0e23\u0e49\u0e32\u0e07\u0e04\u0e33\u0e02\u0e2d\u0e41\u0e25\u0e49\u0e27\u0e04\u0e23\u0e31\u0e1a \ud83d\ude0a \u0e16\u0e49\u0e32\u0e21\u0e35\u0e04\u0e33\u0e16\u0e32\u0e21\u0e40\u0e1e\u0e34\u0e48\u0e21\u0e40\u0e15\u0e34\u0e21\u0e2b\u0e23\u0e37\u0e2d\u0e2d\u0e22\u0e32\u0e01\u0e40\u0e23\u0e34\u0e48\u0e21\u0e43\u0e2b\u0e21\u0e48 \u0e1a\u0e2d\u0e01\u0e44\u0e14\u0e49\u0e40\u0e25\u0e22\u0e19\u0e30\u0e04\u0e23\u0e31\u0e1a",
+            sender: "ai",
+            role: "assistant",
+            animate: true,
+            timestamp: new Date().toISOString(),
+          },
+        ];
+      } else {
+        // User sent a new question while a submission was pending — clear pending and handle normally
+        pendingNocolyFieldsRef.current = null;
+        const response = await handleQuestion(input, newHistory);
+        aiResponses = Array.isArray(response) ? response : [response];
+      }
+    } else {
+      // Normal flow
+      const response = await handleQuestion(input, newHistory);
+      aiResponses = Array.isArray(response) ? response : [response];
+    }
 
     const finalHistory = [
       ...newHistory,
@@ -702,6 +885,11 @@ function App() {
       console.log(`[0] Detected Language: ${detectedLanguage}`);
       console.log("[0] Translated Text:", translatedText);
 
+      // Convenience flag for bilingual messaging throughout this function
+      const isThai = String(detectedLanguage || "")
+        .toLowerCase()
+        .includes("thai");
+
       // Decide whether to retrieve external knowledge (Weaviate)
       const retrievalNeeded = shouldRetrieveFromKnowledgeBase(
         translatedText,
@@ -759,20 +947,47 @@ function App() {
       const analysis = analyzeChatLog(chatHistory);
       console.log("[ANALYSIS] Extracted trip data:", analysis);
 
-      // If user intends to create a Nocoly record, handle that flow first
+      // If user intends to create a Nocoly record, handle that flow with LLM extraction
       const wantsCreate = shouldCreateRecord(question, chatHistory, analysis);
       if (wantsCreate) {
         console.log("[FLOW] Create record intent detected");
-        if (!analysis.isComplete) {
-          // Ask for missing information
-          const missingList = analysis.missing.join(", ");
-          const isThai = String(detectedLanguage || "")
-            .toLowerCase()
-            .includes("thai");
-          const askText = isThai
-            ? `ยังขาดข้อมูล: ${missingList}. กรุณาให้ข้อมูลเพิ่มเติม.`
-            : `Missing fields: ${missingList}. Please provide them.`;
+        setProcessingStep(
+          "\u0e01\u0e33\u0e25\u0e31\u0e07\u0e27\u0e34\u0e40\u0e04\u0e23\u0e32\u0e30\u0e2b\u0e4c\u0e02\u0e49\u0e2d\u0e21\u0e39\u0e25\u0e01\u0e32\u0e23\u0e40\u0e14\u0e34\u0e19\u0e17\u0e32\u0e07...",
+        );
 
+        // Use LLM extraction for accuracy; regex analysis is a fast fallback
+        const llmAnalysis = await extractTripDataWithLLM(chatHistory);
+        // If LLM extraction is complete, use it; otherwise prefer whichever has fewer missing fields
+        const finalAnalysis = llmAnalysis.isComplete
+          ? llmAnalysis
+          : analysis.isComplete
+            ? analysis
+            : llmAnalysis.missing.length <= analysis.missing.length
+              ? llmAnalysis
+              : analysis;
+
+        const fieldLabels = {
+          purpose: isThai
+            ? "\u0e27\u0e31\u0e15\u0e16\u0e38\u0e1b\u0e23\u0e30\u0e2a\u0e07\u0e04\u0e4c\u0e01\u0e32\u0e23\u0e40\u0e14\u0e34\u0e19\u0e17\u0e32\u0e07"
+            : "trip purpose",
+          destination: isThai
+            ? "\u0e2a\u0e16\u0e32\u0e19\u0e17\u0e35\u0e48\u0e1b\u0e0f\u0e34\u0e1a\u0e31\u0e15\u0e34\u0e07\u0e32\u0e19"
+            : "destination",
+          startDate: isThai
+            ? "\u0e27\u0e31\u0e19\u0e17\u0e35\u0e48\u0e40\u0e14\u0e34\u0e19\u0e17\u0e32\u0e07\u0e44\u0e1b"
+            : "departure date",
+          endDate: isThai
+            ? "\u0e27\u0e31\u0e19\u0e17\u0e35\u0e48\u0e40\u0e14\u0e34\u0e19\u0e17\u0e32\u0e07\u0e01\u0e25\u0e31\u0e1a"
+            : "return date",
+        };
+
+        if (!finalAnalysis.isComplete) {
+          const missingLabeled = finalAnalysis.missing
+            .map((f) => fieldLabels[f] || f)
+            .join(", ");
+          const askText = isThai
+            ? `\u0e40\u0e1e\u0e37\u0e48\u0e2d\u0e2a\u0e23\u0e49\u0e32\u0e07\u0e04\u0e33\u0e02\u0e2d\u0e40\u0e1a\u0e34\u0e01\u0e04\u0e48\u0e32\u0e43\u0e0a\u0e49\u0e08\u0e48\u0e32\u0e22 \u0e22\u0e31\u0e07\u0e02\u0e32\u0e14\u0e02\u0e49\u0e2d\u0e21\u0e39\u0e25\u0e40\u0e1e\u0e34\u0e48\u0e21\u0e40\u0e15\u0e34\u0e21\u0e14\u0e31\u0e07\u0e19\u0e35\u0e49\u0e04\u0e23\u0e31\u0e1a:\n\n**${missingLabeled}**\n\n\u0e01\u0e23\u0e38\u0e13\u0e32\u0e43\u0e2b\u0e49\u0e02\u0e49\u0e2d\u0e21\u0e39\u0e25\u0e40\u0e1e\u0e34\u0e48\u0e21\u0e40\u0e15\u0e34\u0e21\u0e40\u0e1e\u0e37\u0e48\u0e2d\u0e14\u0e33\u0e40\u0e19\u0e34\u0e19\u0e01\u0e32\u0e23\u0e15\u0e48\u0e2d\u0e44\u0e1b\u0e04\u0e23\u0e31\u0e1a`
+            : `To create the reimbursement request, I still need the following details:\n\n**${missingLabeled}**\n\nPlease provide them and I'll get the request ready for you.`;
           return [
             {
               text: askText,
@@ -784,13 +999,17 @@ function App() {
           ];
         }
 
-        // Map extracted values to Nocoly writable fields
-        setProcessingStep("Preparing Nocoly payload...");
-        const nocolyFields = mapToNocolyFields(analysis.extracted);
+        // All required fields found — map to Nocoly fields and show summary for confirmation
+        setProcessingStep(
+          "\u0e01\u0e33\u0e25\u0e31\u0e07\u0e40\u0e15\u0e23\u0e35\u0e22\u0e21\u0e02\u0e49\u0e2d\u0e21\u0e39\u0e25\u0e04\u0e33\u0e02\u0e2d...",
+        );
+        const nocolyFields = mapToNocolyFields(finalAnalysis.extracted);
         if (!nocolyFields || nocolyFields.length === 0) {
           return [
             {
-              text: "ไม่พบข้อมูลที่สามารถแมปเป็นฟิลด์คำขอได้ โปรดระบุรายละเอียดเพิ่มเติม",
+              text: isThai
+                ? "\u0e44\u0e21\u0e48\u0e2a\u0e32\u0e21\u0e32\u0e23\u0e16\u0e41\u0e21\u0e1b\u0e02\u0e49\u0e2d\u0e21\u0e39\u0e25\u0e44\u0e1b\u0e22\u0e31\u0e07\u0e1f\u0e34\u0e25\u0e14\u0e4c\u0e04\u0e33\u0e02\u0e2d\u0e44\u0e14\u0e49 \u0e01\u0e23\u0e38\u0e13\u0e32\u0e23\u0e30\u0e1a\u0e38\u0e23\u0e32\u0e22\u0e25\u0e30\u0e40\u0e2d\u0e35\u0e22\u0e14\u0e01\u0e32\u0e23\u0e40\u0e14\u0e34\u0e19\u0e17\u0e32\u0e07\u0e40\u0e1e\u0e34\u0e48\u0e21\u0e40\u0e15\u0e34\u0e21\u0e04\u0e23\u0e31\u0e1a"
+                : "Could not map the trip details to valid request fields. Please provide more information.",
               sender: "ai",
               role: "assistant",
               timestamp: new Date().toISOString(),
@@ -799,24 +1018,40 @@ function App() {
           ];
         }
 
-        setProcessingStep("Submitting to Nocoly...");
-        const createResult = await createNocolyRecord(nocolyFields);
-        if (createResult.success) {
-          const confirmText = `The request form has been created successfully. Please check the system again.`;
-          return [
-            {
-              text: confirmText,
-              sender: "ai",
-              role: "assistant",
-              timestamp: new Date().toISOString(),
-              animate: true,
-            },
-          ];
-        }
+        // Build a readable summary of what will be submitted
+        const ex = finalAnalysis.extracted;
+        const summaryLines = [
+          ex.purpose
+            ? `- **\u0e27\u0e31\u0e15\u0e16\u0e38\u0e1b\u0e23\u0e30\u0e2a\u0e07\u0e04\u0e4c:** ${ex.purpose}`
+            : null,
+          ex.destination
+            ? `- **\u0e2a\u0e16\u0e32\u0e19\u0e17\u0e35\u0e48:** ${ex.destination}`
+            : null,
+          ex.startDate
+            ? `- **\u0e27\u0e31\u0e19\u0e40\u0e14\u0e34\u0e19\u0e17\u0e32\u0e07\u0e44\u0e1b:** ${ex.startDate}`
+            : null,
+          ex.endDate
+            ? `- **\u0e27\u0e31\u0e19\u0e40\u0e14\u0e34\u0e19\u0e17\u0e32\u0e07\u0e01\u0e25\u0e31\u0e1a:** ${ex.endDate}`
+            : null,
+          ex.travelType
+            ? `- **\u0e1b\u0e23\u0e30\u0e40\u0e20\u0e17\u0e01\u0e32\u0e23\u0e40\u0e14\u0e34\u0e19\u0e17\u0e32\u0e07:** ${ex.travelType}`
+            : null,
+          ex.reimbursementType
+            ? `- **\u0e1b\u0e23\u0e30\u0e40\u0e20\u0e17\u0e01\u0e32\u0e23\u0e40\u0e1a\u0e34\u0e01:** ${ex.reimbursementType}`
+            : null,
+        ]
+          .filter(Boolean)
+          .join("\n");
 
+        // Store fields pending user confirmation — do NOT submit yet
+        pendingNocolyFieldsRef.current = nocolyFields;
+
+        const confirmMsg = isThai
+          ? `\u0e1e\u0e1a\u0e02\u0e49\u0e2d\u0e21\u0e39\u0e25\u0e04\u0e23\u0e1a\u0e16\u0e49\u0e27\u0e19\u0e2a\u0e33\u0e2b\u0e23\u0e31\u0e1a\u0e2a\u0e23\u0e49\u0e32\u0e07\u0e04\u0e33\u0e02\u0e2d\u0e40\u0e1a\u0e34\u0e01\u0e04\u0e48\u0e32\u0e43\u0e0a\u0e49\u0e08\u0e48\u0e32\u0e22\u0e04\u0e23\u0e31\u0e1a \ud83d\udccb\n\n${summaryLines}\n\n**\u0e22\u0e37\u0e19\u0e22\u0e31\u0e19\u0e01\u0e32\u0e23\u0e2a\u0e48\u0e07\u0e04\u0e33\u0e02\u0e2d\u0e19\u0e35\u0e49\u0e44\u0e2b\u0e21\u0e04\u0e23\u0e31\u0e1a?**\n(\u0e1e\u0e34\u0e21\u0e1e\u0e4c "\u0e22\u0e37\u0e19\u0e22\u0e31\u0e19" \u0e40\u0e1e\u0e37\u0e48\u0e2d\u0e14\u0e33\u0e40\u0e19\u0e34\u0e19\u0e01\u0e32\u0e23 \u0e2b\u0e23\u0e37\u0e2d "\u0e22\u0e01\u0e40\u0e25\u0e34\u0e01" \u0e40\u0e1e\u0e37\u0e48\u0e2d\u0e22\u0e01\u0e40\u0e25\u0e34\u0e01)`
+          : `I have all the details ready for your reimbursement request \ud83d\udccb\n\n${summaryLines}\n\n**Would you like to submit this request?**\n(Type "confirm" to proceed, or "cancel" to cancel)`;
         return [
           {
-            text: `Failed to create request: ${createResult.error || "Unknown error"}`,
+            text: confirmMsg,
             sender: "ai",
             role: "assistant",
             timestamp: new Date().toISOString(),
@@ -825,20 +1060,33 @@ function App() {
         ];
       }
 
-      // Step 4: Build optimized instruction prompt with context awareness
-      // Use recent user questions for better context understanding (faster response)
-      const recentQuestions = chatHistory
-        .filter((m) => m.sender === "user")
-        .slice(-2)
-        .map((m) => m.text)
-        .join(" -> ");
+      // Step 4: Build context-aware instruction prompt
+      // Include recent conversation exchanges so the LLM understands the full thread
+      const recentExchanges = chatHistory
+        .slice(-6)
+        .map(
+          (m) =>
+            `${m.sender === "user" ? "User" : "Assistant"}: ${(m.text || "").substring(0, 300)}`,
+        )
+        .join("\n");
 
-      const instructionPrompt = `【Employee Question】
-${question}${
-        recentQuestions ? `\n【Context from previous】: ${recentQuestions}` : ""
-      }
+      // Include any trip context already detected by regex analysis
+      const tripContextHint = Object.values(analysis.extracted || {}).some(
+        Boolean,
+      )
+        ? `【Detected Trip Context】 ${Object.entries(analysis.extracted)
+            .filter(([, v]) => v)
+            .map(([k, v]) => `${k}: ${v}`)
+            .join(", ")}`
+        : "";
 
-【Available HR Documents】
+      const instructionPrompt = `【User's Latest Question】
+${question}
+
+【Recent Conversation Context (last 3 exchanges)】
+${recentExchanges}
+${tripContextHint ? `\n${tripContextHint}\n` : ""}
+【Available Knowledge Base Documents】
 ${
   cleanedKB.length > 0
     ? cleanedKB
@@ -846,26 +1094,23 @@ ${
           (c, i) =>
             `${i + 1}. Topic: ${c.documentTopic}\n   Description: ${
               c.documentDescription
-            }\n   Content: ${c.documentDetail}\n   Match Confidence: ${(
+            }\n   Content: ${c.documentDetail}\n   Relevance: ${(
               c.certainty * 100
             ).toFixed(0)}%`,
         )
         .join("\n\n")
-    : "No matching documents found"
+    : "No matching documents found for this query"
 }
 
-【CRITICAL Instructions】
-1. The user is asking in **${detectedLanguage}**. You MUST answer in **${detectedLanguage}**.
-2. Analyze the user's question to understand specifically what they are asking.
-3. ONLY answer using documents provided above - do NOT make up information.
-4. If documents found AND contain relevant information: hasRelevantDocument = true.
-   - **Provide a detailed explanation** based on the documents.
-   - **Do NOT summarize or abbreviate.** Use the full details from the documents to explain.
-   - **Organize the answer** logically (e.g., steps, bullet points) to help the user understand.
-   - **Answer in ${detectedLanguage}.**
-5. If NO documents found OR documents are NOT relevant to the question: hasRelevantDocument = false, answer = "Sorry, I couldn't find any relevant documents for your question. Please contact HR." (Translate this message to **${detectedLanguage}**).
-6. For referenceDocuments: ONLY include documents you actually used in the answer.
-7. Return ONLY valid JSON matching the schema, no additional text.`;
+【Response Instructions】
+1. The user communicates in **${detectedLanguage}**. RESPOND ENTIRELY IN **${detectedLanguage}**. Do NOT mix languages.
+2. Use the full conversation context above to understand what the user is truly asking — consider prior messages.
+3. Answer naturally and helpfully, like a knowledgeable colleague — not a rules engine or database.
+4. Use ONLY the documents above for policy/rate/rule information. Do NOT invent facts.
+5. If no relevant documents exist → set hasRelevantDocument = false and suggest contacting HR.
+6. In referenceDocuments → include ONLY documents you actually referenced in your answer.
+7. conversationState: "INFO" for Q&A, "GATHERING" if user seems to be preparing a request with partial details, "READY_TO_CREATE" if all required fields (purpose, destination, startDate, endDate) are clearly present.
+8. RETURN ONLY VALID JSON. Nothing outside JSON.`;
 
       // Step 5: Call LLM for HR response
       if (ENABLE_PROCESSING_ANIMATION)
@@ -908,6 +1153,17 @@ ${
         knowledgeBase: cleanedKB,
         animate: true,
       };
+
+      // If LLM detects all required trip details are present, proactively suggest creating a request
+      if (
+        hrResponse.conversationState === "READY_TO_CREATE" &&
+        !pendingNocolyFieldsRef.current
+      ) {
+        const readyHint = isThai
+          ? '\n\n---\n\ud83d\udca1 **\u0e1e\u0e1a\u0e02\u0e49\u0e2d\u0e21\u0e39\u0e25\u0e04\u0e23\u0e1a\u0e41\u0e25\u0e49\u0e27!** \u0e2b\u0e32\u0e01\u0e15\u0e49\u0e2d\u0e07\u0e01\u0e32\u0e23\u0e22\u0e37\u0e48\u0e19\u0e04\u0e33\u0e02\u0e2d\u0e40\u0e1a\u0e34\u0e01\u0e04\u0e48\u0e32\u0e43\u0e0a\u0e49\u0e08\u0e48\u0e32\u0e22 \u0e1e\u0e34\u0e21\u0e1e\u0e4c **"\u0e2a\u0e23\u0e49\u0e32\u0e07\u0e04\u0e33\u0e02\u0e2d"** \u0e44\u0e14\u0e49\u0e40\u0e25\u0e22\u0e04\u0e23\u0e31\u0e1a'
+          : '\n\n---\n\ud83d\udca1 **You have all the required details!** If you\'d like to submit a reimbursement request, just type **"create request"**.';
+        mainResponse.text = hrResponse.answer + readyHint;
+      }
 
       const responses = [mainResponse];
 
@@ -1151,27 +1407,24 @@ ${
   }
 
   /**
-   * Call LLM for HR response with optimized context
-   * - Uses recent conversation history (last 2 exchanges) for faster response
-   * - System prompt + optimized instruction + context for fluent conversation
-   * - LLM MUST return JSON matching HRDocumentResponse schema
-   * - ALL LLM-generated content MUST be Thai
+   * Call LLM for HR response with full conversation context
+   * - Uses recent conversation history (last 3 exchanges = 6 messages)
+   * - System prompt + context-aware instruction + conversation history
+   * - LLM returns JSON matching the updated HR response schema
    */
   async function generateHRResponse(
     instructionPrompt,
     chatHistory,
     cleanedKB = [],
   ) {
-    // Optimize: Use only recent conversation (last 2 user messages) to reduce tokens
-    const recentHistory = (chatHistory || [])
-      .slice(-4) // Last 2 exchanges (user + assistant pairs)
-      .map((m) => ({
-        role: m.role,
-        content: m.text,
-      }));
+    // Pass last 3 full exchanges (6 messages) to give the LLM rich conversation context
+    const recentHistory = (chatHistory || []).slice(-6).map((m) => ({
+      role: m.role,
+      content: m.text,
+    }));
 
     try {
-      // Build instruction with JSON format requirement
+      // Append JSON schema requirement to the instruction prompt
       const enhancedPrompt =
         instructionPrompt +
         `
@@ -1179,20 +1432,22 @@ ${
 Return response in this exact JSON format:
 {
   "hasRelevantDocument": boolean,
-  "answer": "Answer in the same language as the user's question",
+  "answer": "Natural, helpful answer in the user's language",
+  "conversationState": "INFO" | "GATHERING" | "READY_TO_CREATE",
   "referenceDocuments": [
     {
       "instanceID": "id here",
       "documentTopic": "topic here",
       "documentDescription": "description here"
     }
-  ]
+  ],
+  "missingFields": []
 }`;
 
       const requestBody = {
         model: "gpt-4o-mini",
-        temperature: 0.2,
-        max_tokens: 1000,
+        temperature: 0.3,
+        max_tokens: 1500,
         messages: [
           { role: "system", content: SYSTEM_PROMPT },
           ...recentHistory,
@@ -1243,9 +1498,15 @@ Return response in this exact JSON format:
         throw new Error("LLM response missing required fields");
       }
 
-      // Ensure referenceDocuments is an array
+      // Normalise optional new fields so callers always have them
       if (!Array.isArray(parsedResponse.referenceDocuments)) {
         parsedResponse.referenceDocuments = [];
+      }
+      if (!parsedResponse.conversationState) {
+        parsedResponse.conversationState = "INFO";
+      }
+      if (!Array.isArray(parsedResponse.missingFields)) {
+        parsedResponse.missingFields = [];
       }
 
       return { parsedResponse, usage: data.usage };
@@ -1260,7 +1521,9 @@ Return response in this exact JSON format:
   return (
     <div className="App">
       <div className="chat-header">
-        <div className="header-title">HR AI Assistant</div>
+        <div className="header-title">
+          ผู้ช่วย AI — เบิกค่าใช้จ่ายการเดินทางไปราชการ
+        </div>
         <button
           className="theme-toggle-btn"
           onClick={() => setIsDarkMode(!isDarkMode)}
@@ -1435,8 +1698,8 @@ Return response in this exact JSON format:
         </form>
 
         <div className="suggested-questions-wrapper">
-          <p className="suggested-questions-label">แนะนำคำถาม</p>
-          {/* <div className="suggested-questions-grid">
+          <p className="suggested-questions-label">คำถามแนะนำ</p>
+          <div className="suggested-questions-grid">
             {SUGGESTED_QUESTIONS.map((question, idx) => (
               <button
                 key={idx}
@@ -1446,11 +1709,11 @@ Return response in this exact JSON format:
               >
                 {question}
               </button>
-            ))} */}
+            ))}
+          </div>
         </div>
       </div>
     </div>
-    // </div>
   );
 }
 
