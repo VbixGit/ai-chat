@@ -3,9 +3,20 @@ const HtmlWebpackPlugin = require("html-webpack-plugin");
 const webpack = require("webpack");
 const dotenv = require("dotenv");
 
-// Load environment variables from .env file (safe: fallback to empty object)
+// Load environment variables from .env file (local dev).
 const dotenvResult = dotenv.config();
-const env = (dotenvResult && dotenvResult.parsed) || {};
+const fileEnv = (dotenvResult && dotenvResult.parsed) || {};
+
+// Also pick up REACT_APP_* vars already in process.env (Vercel / CI injects them here).
+// process.env takes precedence so Vercel dashboard values always win over .env file.
+const processReactEnv = Object.keys(process.env)
+  .filter((k) => k.startsWith("REACT_APP_"))
+  .reduce((acc, k) => {
+    acc[k] = process.env[k];
+    return acc;
+  }, {});
+
+const env = { ...fileEnv, ...processReactEnv };
 
 // Create an object to define environment variables for the client (DefinePlugin expects key-value)
 const envKeys = Object.keys(env).reduce((prev, next) => {
