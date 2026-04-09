@@ -32,7 +32,8 @@ const WEAVIATE_ENDPOINT = getEnv("REACT_APP_WEAVIATE_ENDPOINT", "");
 const WEAVIATE_API_KEY = getEnv("REACT_APP_WEAVIATE_API_KEY", "");
 const OPENAI_API_KEY = getEnv("REACT_APP_OPENAI_API_KEY", "");
 
-const ENABLE_TOKEN_LOGGING = true;
+const ENABLE_TOKEN_LOGGING = false; // set true to show Token Usage Report bubble
+const ENABLE_RELATED_DOCUMENTS = false; // set true to show Related Documents panel
 const ENABLE_STREAMING_EFFECT = true;
 const ENABLE_PROCESSING_ANIMATION = true;
 
@@ -1328,7 +1329,8 @@ Return response in this exact JSON format:
                   )}
                 </div>
 
-                {msg.sender === "ai" &&
+                {ENABLE_RELATED_DOCUMENTS &&
+                  msg.sender === "ai" &&
                   msg.knowledgeBase &&
                   msg.knowledgeBase.length > 0 && (
                     <div className="refs-inline">
