@@ -131,18 +131,28 @@ READY_TO_CREATE: ALL 8 required fields below are present in the conversation →
    • ประเภท ง
    • ประเภท จ
 4. destination — สถานที่ไปราชการ (free text)
-5. startDate — วันเริ่มเดินทาง (date, YYYY-M-D format)
-6. endDate — วันสิ้นสุดการเดินทาง (date, YYYY-M-D format)
+5. startDate — วันเริ่มเดินทาง (รับวันที่ได้ทุกรูปแบบที่ผู้ใช้พิมพ์ — ระบบจะแปลงให้เอง)
+6. endDate — วันสิ้นสุดการเดินทาง (รับวันที่ได้ทุกรูปแบบที่ผู้ใช้พิมพ์ — ระบบจะแปลงให้เอง)
 7. claimType — ประเภทการเบิกเงิน (dropdown — when asking, list these options):
    • เหมาจ่าย
    • จ่ายจริง
    • Option 3
-8. governmentRole — ประเภทผู้เดินทาง (free text, e.g. ข้าราชการ ก, ข้าราชการ ข)
+8. governmentRole — ประเภทผู้เดินทาง (dropdown — when asking, list these options):
+   • ข้าราชการ ก
+   • ข้าราชการ ข
 
 【GATHERING guidance】
 - Group multiple missing fields into one message when natural (e.g., ask for dates together)
 - For every dropdown field that is missing, ALWAYS display the full list of options in the same message
 - Never ask the user to repeat information they have already provided in the conversation
+- For dates: accept ANY format the user provides (Thai text like "20-23 มีนาคม 2569", "วันที่ 20 มีนาคม", "20/3/2026", etc.). NEVER instruct the user to type dates in YYYY-M-D or any specific format. The system converts dates automatically.
+
+【CRITICAL — NO HALLUCINATION RULE】
+- NEVER assume, infer, or assign default values for dropdown fields (travelType, countryType, claimType, governmentRole).
+- A dropdown field is ONLY considered provided if the user's message contains the EXACT option text (e.g., "ไปราชการในราชอาณาจักร", "เหมาจ่าย", "ประเภท ก", "ข้าราชการ ก").
+- A destination name (e.g., hotel, city) does NOT imply travelType. Do NOT infer "ไปราชการในราชอาณาจักร" from a Thai hotel name.
+- If the user has NOT explicitly selected a dropdown value, treat that field as missing and ask for it — do NOT display a guessed value.
+- In your answer, ONLY list field values that the user explicitly provided. Show ALL missing fields as questions, NOT as assumed values.
 
 【Output Format — MANDATORY】
 Return ONLY valid JSON, nothing outside JSON:
@@ -176,12 +186,27 @@ Extract these fields:
 - travelTotal: Number — travel expense amount in Thai Baht. Null if not clearly stated.
 - accommodationTotal: Number — accommodation cost in Thai Baht. Null if not clearly stated.
 - clothingTotal: Number — clothing/uniform allowance in Thai Baht. Null if not clearly stated.
-- extraField: String — government official rank if mentioned (e.g. "\u0e02\u0e49\u0e32\u0e23\u0e32\u0e0a\u0e01\u0e32\u0e23 \u0e01"). Null if not mentioned.
+- extraField: One of ["ข้าราชการ ก","ข้าราชการ ข"] or null — government official rank. Null if not mentioned.
 
 Rules:
-- Extract ONLY information explicitly stated in the conversation. Do NOT infer or guess.
-- Return null for any field not clearly stated in the text.
-- Convert any date format (dd/mm/yyyy, dd-mm-yyyy, Thai Buddhist year) to YYYY-MM-DD (Gregorian).
+- CRITICAL: Extract field values ONLY from lines that start with "User:". Lines starting with "Assistant:" are AI-generated summaries and must NEVER be used as a source for extracted values — even if they contain exact option text.
+- Extract ONLY information explicitly stated by the user. Do NOT infer, guess, or use context clues.
+- Return null for any field not clearly and literally stated in a User line.
+- STRICT ANTI-HALLUCINATION for dropdown fields:
+  * travelType: ONLY set if the user typed one of the EXACT strings "ไปราชการในราชอาณาจักร", "ไปราชการต่างประเทศชั่วคราว", or "ไปราชการประจำในต่างประเทศ". A Thai hotel/venue name does NOT imply domestic travel. Do NOT infer.
+  * countryType: ONLY set if the user typed "ประเภท ก", "ประเภท ข", "Option 3", "ประเภท ค", "ประเภท ง", or "ประเภท จ" — verbatim. Do NOT infer.
+  * reimbursementType: ONLY set if the user typed "เหมาจ่าย" or "จ่ายจริง" — verbatim. Do NOT infer.
+  * extraField: ONLY set if the user typed "ข้าราชการ ก" or "ข้าราชการ ข" — verbatim. Any other value must be null.
+- Date conversion rules (CRITICAL — output YYYY-MM-DD Gregorian for every date found):
+  * Thai Buddhist Era (BE) year → subtract 543 to get CE year (e.g. 2569 → 2026, 2568 → 2025)
+  * Thai month names → month numbers:
+    มกราคม=1, กุมภาพันธ์=2, มีนาคม=3, เมษายน=4, พฤษภาคม=5, มิถุนายน=6,
+    กรกฎาคม=7, สิงหาคม=8, กันยายน=9, ตุลาคม=10, พฤศจิกายน=11, ธันวาคม=12
+  * Date range like "20-23 มีนาคม 2569" → startDate="2026-3-20", endDate="2026-3-23"
+  * Date range like "วันที่ 20-23 มีนาคม 2569" → same as above
+  * Single date like "20 มีนาคม 2569" → "2026-3-20"
+  * dd/mm/yyyy or dd-mm-yyyy → convert normally
+  * If only a start day and end day are given with the same month/year (e.g. "20-23 มีนาคม 2569"), infer both startDate and endDate from that range
 - Output valid JSON only with no extra text.`;
 
 // ===== Weaviate Collection Configuration =====
@@ -380,21 +405,79 @@ function App() {
     setTokenLoggingEnabled(Boolean(enabled));
   }
 
+  // Thai month name → number mapping
+  const THAI_MONTHS = {
+    มกราคม: 1,
+    กุมภาพันธ์: 2,
+    มีนาคม: 3,
+    เมษายน: 4,
+    พฤษภาคม: 5,
+    มิถุนายน: 6,
+    กรกฎาคม: 7,
+    สิงหาคม: 8,
+    กันยายน: 9,
+    ตุลาคม: 10,
+    พฤศจิกายน: 11,
+    ธันวาคม: 12,
+  };
+
+  /**
+   * Convert a Thai Buddhist Era year to CE. Leaves CE years unchanged.
+   * Heuristic: Thai BE years in the 2400–2600 range → subtract 543.
+   */
+  function beToGregorian(year) {
+    const y = parseInt(year, 10);
+    return y > 2400 ? y - 543 : y;
+  }
+
   // Analyze accumulated chat log JSON and attempt to extract trip-related fields
   function analyzeChatLog(messagesArray = []) {
-    const text = (messagesArray || []).map((m) => m.text || "").join("\n");
+    // Only scan USER messages — AI messages may contain hallucinated summaries
+    // that would create a false feedback loop in field detection.
+    const text = (messagesArray || [])
+      .filter((m) => m.sender === "user" || m.role === "user")
+      .map((m) => m.text || "")
+      .join("\n");
     const lower = text.toLowerCase();
 
-    // Extract dates (support yyyy-mm-dd, dd/mm/yyyy, dd-mm-yyyy)
-    const ymd = /\b(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})\b/g;
-    const dmy = /\b(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})\b/g;
     const dates = [];
     let m;
-    while ((m = ymd.exec(text)) !== null) {
-      dates.push(`${m[1]}-${parseInt(m[2], 10)}-${parseInt(m[3], 10)}`);
+
+    // 1. Thai date range: "20-23 มีนาคม 2569" or "วันที่ 20 - 23 มีนาคม 2569"
+    const thaiRange =
+      /\b(\d{1,2})\s*[-–]\s*(\d{1,2})\s+(มกราคม|กุมภาพันธ์|มีนาคม|เมษายน|พฤษภาคม|มิถุนายน|กรกฎาคม|สิงหาคม|กันยายน|ตุลาคม|พฤศจิกายน|ธันวาคม)\s+(\d{4})/g;
+    while ((m = thaiRange.exec(text)) !== null) {
+      const mo = THAI_MONTHS[m[3]];
+      const yr = beToGregorian(m[4]);
+      dates.push(`${yr}-${mo}-${parseInt(m[1], 10)}`);
+      dates.push(`${yr}-${mo}-${parseInt(m[2], 10)}`);
     }
-    while ((m = dmy.exec(text)) !== null) {
-      dates.push(`${m[3]}-${parseInt(m[2], 10)}-${parseInt(m[1], 10)}`);
+
+    // 2. Thai single date: "20 มีนาคม 2569" (only when no range captured)
+    if (dates.length === 0) {
+      const thaiSingle =
+        /\b(\d{1,2})\s+(มกราคม|กุมภาพันธ์|มีนาคม|เมษายน|พฤษภาคม|มิถุนายน|กรกฎาคม|สิงหาคม|กันยายน|ตุลาคม|พฤศจิกายน|ธันวาคม)\s+(\d{4})/g;
+      while ((m = thaiSingle.exec(text)) !== null) {
+        const mo = THAI_MONTHS[m[2]];
+        const yr = beToGregorian(m[3]);
+        dates.push(`${yr}-${mo}-${parseInt(m[1], 10)}`);
+      }
+    }
+
+    // 3. Numeric formats: yyyy-mm-dd or dd/mm/yyyy or dd-mm-yyyy (fallback)
+    if (dates.length === 0) {
+      const ymd = /\b(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})\b/g;
+      const dmy = /\b(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})\b/g;
+      while ((m = ymd.exec(text)) !== null) {
+        dates.push(
+          `${beToGregorian(m[1])}-${parseInt(m[2], 10)}-${parseInt(m[3], 10)}`,
+        );
+      }
+      while ((m = dmy.exec(text)) !== null) {
+        dates.push(
+          `${beToGregorian(m[3])}-${parseInt(m[2], 10)}-${parseInt(m[1], 10)}`,
+        );
+      }
     }
 
     let startDate = null;
@@ -406,15 +489,16 @@ function App() {
       startDate = dates[0];
     }
 
-    // Heuristics for other fields
-    const travelType =
-      lower.includes("ไปราชการในราชอาณาจักร") || lower.includes("ในราชอาณาจักร")
-        ? "ไปราชการในราชอาณาจักร"
-        : lower.includes("ไปราชการต่างประเทศ") || lower.includes("ต่างประเทศ")
-          ? "ไปราชการต่างประเทศชั่วคราว"
-          : lower.includes("ไปราชการประจำ")
-            ? "ไปราชการประจำในต่างประเทศ"
-            : null;
+    // Heuristics for other fields — only match fully explicit phrases
+    const travelType = lower.includes("ไปราชการในราชอาณาจักร")
+      ? "ไปราชการในราชอาณาจักร"
+      : lower.includes("ไปราชการต่างประเทศชั่วคราว") ||
+          lower.includes("ไปราชการต่างประเทศ")
+        ? "ไปราชการต่างประเทศชั่วคราว"
+        : lower.includes("ไปราชการประจำในต่างประเทศ") ||
+            lower.includes("ไปราชการประจำ")
+          ? "ไปราชการประจำในต่างประเทศ"
+          : null;
 
     const reimbursementType = lower.includes("เหมาจ่าย")
       ? "เหมาจ่าย"
@@ -471,10 +555,8 @@ function App() {
       amounts.clothingTotal = foundAmounts[2];
     }
 
-    const extraFieldMatch = text.match(/ข้าราชการ\s*([ก-ฮA-Za-z0-9]+)/i);
-    const extraField = extraFieldMatch
-      ? `ข้าราชการ ${extraFieldMatch[1]}`
-      : null;
+    const allowedExtraFields = ["ข้าราชการ ก", "ข้าราชการ ข"];
+    const extraField = allowedExtraFields.find((v) => text.includes(v)) || null;
 
     const extracted = {
       purpose,
@@ -514,10 +596,12 @@ function App() {
    * Falls back to analyzeChatLog (regex) on any error.
    */
   async function extractTripDataWithLLM(chatHistory = []) {
+    // Include full conversation for context, but flag speaker so the LLM
+    // knows to extract field values from User lines ONLY.
     const conversationText = (chatHistory || [])
       .map(
         (m) =>
-          `${m.sender === "user" ? "User" : "Assistant"}: ${(m.text || "").substring(0, 400)}`,
+          `${m.sender === "user" || m.role === "user" ? "User" : "Assistant"}: ${(m.text || "").substring(0, 400)}`,
       )
       .join("\n");
 
@@ -655,7 +739,11 @@ function App() {
       });
     }
 
-    if (extracted.extraField) {
+    const allowedExtraFields = ["ข้าราชการ ก", "ข้าราชการ ข"];
+    if (
+      extracted.extraField &&
+      allowedExtraFields.includes(extracted.extraField)
+    ) {
       fields.push({
         id: "69d5ff17360586f58a4c374b",
         value: extracted.extraField,
@@ -680,6 +768,14 @@ function App() {
         value: extracted.clothingTotal,
       });
     }
+
+    // Fixed system fields — not collected from the user
+    fields.push({ id: "69d7531d212d613b07e702fe", value: "ร่างแบบ" });
+    fields.push({ id: "69d75633212d613b07e7031d", value: "ร่างแบบฟอร์ม" });
+    fields.push({
+      id: "_owner",
+      value: "005b1eab-e312-4696-b7fb-6d78daac7ee8",
+    });
 
     return fields;
   }
@@ -921,29 +1017,88 @@ function App() {
       ];
 
       if (confirmKeywords.some((k) => q.includes(k))) {
-        setProcessingStep(
-          "\u0e01\u0e33\u0e25\u0e31\u0e07\u0e2a\u0e48\u0e07\u0e04\u0e33\u0e02\u0e2d\u0e44\u0e1b\u0e22\u0e31\u0e07\u0e23\u0e30\u0e1a\u0e1a...",
-        );
+        setProcessingStep("กำลังตรวจสอบและส่งคำขอไปยังระบบ...");
         const fieldsToSubmit = pendingNocolyFieldsRef.current;
-        pendingNocolyFieldsRef.current = null;
-        const createResult = await submitReimbursementRequest(fieldsToSubmit);
-        const text = createResult.success
-          ? "\u2705 **\u0e2a\u0e23\u0e49\u0e32\u0e07\u0e04\u0e33\u0e02\u0e2d\u0e40\u0e1a\u0e34\u0e01\u0e04\u0e48\u0e32\u0e43\u0e0a\u0e49\u0e08\u0e48\u0e32\u0e22\u0e40\u0e23\u0e35\u0e22\u0e1a\u0e23\u0e49\u0e2d\u0e22\u0e41\u0e25\u0e49\u0e27\u0e04\u0e23\u0e31\u0e1a!** \u0e01\u0e23\u0e38\u0e13\u0e32\u0e15\u0e23\u0e27\u0e08\u0e2a\u0e2d\u0e1a\u0e41\u0e25\u0e30\u0e22\u0e37\u0e19\u0e22\u0e31\u0e19\u0e02\u0e49\u0e2d\u0e21\u0e39\u0e25\u0e2d\u0e35\u0e01\u0e04\u0e23\u0e31\u0e49\u0e07\u0e43\u0e19\u0e23\u0e30\u0e1a\u0e1a\u0e19\u0e30\u0e04\u0e23\u0e31\u0e1a \ud83d\ude0a"
-          : `\u0e02\u0e2d\u0e2d\u0e20\u0e31\u0e22\u0e04\u0e23\u0e31\u0e1a \u0e44\u0e21\u0e48\u0e2a\u0e32\u0e21\u0e32\u0e23\u0e16\u0e2a\u0e48\u0e07\u0e04\u0e33\u0e02\u0e2d\u0e44\u0e14\u0e49\u0e43\u0e19\u0e02\u0e13\u0e30\u0e19\u0e35\u0e49 (${createResult.error || "Unknown error"}) \u0e01\u0e23\u0e38\u0e13\u0e32\u0e25\u0e2d\u0e07\u0e43\u0e2b\u0e21\u0e48\u0e2d\u0e35\u0e01\u0e04\u0e23\u0e31\u0e49\u0e07\u0e2b\u0e23\u0e37\u0e2d\u0e15\u0e34\u0e14\u0e15\u0e48\u0e2d\u0e1c\u0e39\u0e49\u0e14\u0e39\u0e41\u0e25\u0e23\u0e30\u0e1a\u0e1a`;
-        aiResponses = [
-          {
-            text,
-            sender: "ai",
-            role: "assistant",
-            animate: true,
-            timestamp: new Date().toISOString(),
-          },
+
+        // Pre-submission validation: ensure all 8 required field IDs are present
+        const REQUIRED_FIELD_IDS = [
+          "69d4ee2dfa7982b82bd766a2", // purpose
+          "69d4ee2dfa7982b82bd766a3", // travelType
+          "69d4ee2dfa7982b82bd766a4", // countryType
+          "69d4ee2dfa7982b82bd766a5", // destination
+          "69d4ee2dfa7982b82bd766a6", // startDate
+          "69d4ee2dfa7982b82bd766a7", // endDate
+          "69d4eff3212d613b07e64600", // claimType
+          "69d5ff17360586f58a4c374b", // governmentRole
         ];
+        const FIELD_LABELS_FOR_ID = {
+          "69d4ee2dfa7982b82bd766a2": "วัตถุประสงค์การเดินทาง",
+          "69d4ee2dfa7982b82bd766a3":
+            "ประเภทการเดินทาง\n  • ไปราชการในราชอาณาจักร\n  • ไปราชการต่างประเทศชั่วคราว\n  • ไปราชการประจำในต่างประเทศ",
+          "69d4ee2dfa7982b82bd766a4":
+            "ประเทศ/ประเภทประเทศ\n  • ประเภท ก\n  • ประเภท ข\n  • Option 3\n  • ประเภท ค\n  • ประเภท ง\n  • ประเภท จ",
+          "69d4ee2dfa7982b82bd766a5": "สถานที่ไปราชการ",
+          "69d4ee2dfa7982b82bd766a6": "วันเริ่มเดินทาง",
+          "69d4ee2dfa7982b82bd766a7": "วันสิ้นสุดการเดินทาง",
+          "69d4eff3212d613b07e64600":
+            "ประเภทการเบิกเงิน\n  • เหมาจ่าย\n  • จ่ายจริง\n  • Option 3",
+          "69d5ff17360586f58a4c374b":
+            "ประเภทผู้เดินทาง\n  • ข้าราชการ ก\n  • ข้าราชการ ข",
+        };
+        const presentIds = new Set((fieldsToSubmit || []).map((f) => f.id));
+        const missingIds = REQUIRED_FIELD_IDS.filter(
+          (id) => !presentIds.has(id),
+        );
+
+        if (missingIds.length > 0) {
+          // Keep pending so user can provide the missing info
+          setProcessingStep("");
+          const presentLines = REQUIRED_FIELD_IDS.filter((id) =>
+            presentIds.has(id),
+          ).map(
+            (id) =>
+              `  ✅ **${(FIELD_LABELS_FOR_ID[id] || id).split("\n")[0]}:** ${
+                (fieldsToSubmit || []).find((f) => f.id === id)?.value ?? ""
+              }`,
+          );
+          const missingLines = missingIds.map(
+            (id) =>
+              `  ❓ **${(FIELD_LABELS_FOR_ID[id] || id).split("\n")[0]}**`,
+          );
+          const statusBlock = `**สรุปข้อมูลที่ได้รับ:**\n${[...presentLines, ...missingLines].join("\n")}`;
+          const missingDetails = missingIds
+            .map((id) => `**${FIELD_LABELS_FOR_ID[id] || id}**`)
+            .join("\n\n");
+          aiResponses = [
+            {
+              text: `ขออภัยครับ ยังมีข้อมูลที่ขาดหายไปก่อนส่งคำขอ:\n\n${statusBlock}\n\n**ข้อมูลที่ยังขาด — กรุณาระบุหรือเลือกให้ครบครับ:**\n\n${missingDetails}\n\nกรุณาพิมพ์ "ยืนยัน" อีกครั้งหลังจากให้ข้อมูลครบถ้วนครับ`,
+              sender: "ai",
+              role: "assistant",
+              animate: true,
+              timestamp: new Date().toISOString(),
+            },
+          ];
+        } else {
+          pendingNocolyFieldsRef.current = null;
+          const createResult = await submitReimbursementRequest(fieldsToSubmit);
+          const text = createResult.success
+            ? `✅ **สร้างคำขอเบิกค่าใช้จ่ายเรียบร้อยแล้วครับ!** กรุณาตรวจสอบและยืนยันข้อมูลอีกครั้งในระบบนะครับ 😊`
+            : `ขออภัยครับ ไม่สามารถส่งคำขอได้ในขณะนี้ (${createResult.error || "Unknown error"}) กรุณาลองใหม่อีกครั้งหรือติดต่อผู้ดูแลระบบ`;
+          aiResponses = [
+            {
+              text,
+              sender: "ai",
+              role: "assistant",
+              animate: true,
+              timestamp: new Date().toISOString(),
+            },
+          ];
+        }
       } else if (cancelKeywords.some((k) => q.includes(k))) {
         pendingNocolyFieldsRef.current = null;
         aiResponses = [
           {
-            text: "\u0e22\u0e01\u0e40\u0e25\u0e34\u0e01\u0e01\u0e32\u0e23\u0e2a\u0e23\u0e49\u0e32\u0e07\u0e04\u0e33\u0e02\u0e2d\u0e41\u0e25\u0e49\u0e27\u0e04\u0e23\u0e31\u0e1a \ud83d\ude0a \u0e16\u0e49\u0e32\u0e21\u0e35\u0e04\u0e33\u0e16\u0e32\u0e21\u0e40\u0e1e\u0e34\u0e48\u0e21\u0e40\u0e15\u0e34\u0e21\u0e2b\u0e23\u0e37\u0e2d\u0e2d\u0e22\u0e32\u0e01\u0e40\u0e23\u0e34\u0e48\u0e21\u0e43\u0e2b\u0e21\u0e48 \u0e1a\u0e2d\u0e01\u0e44\u0e14\u0e49\u0e40\u0e25\u0e22\u0e19\u0e30\u0e04\u0e23\u0e31\u0e1a",
+            text: "ยกเลิกการสร้างคำขอแล้วครับ 😊 ถ้ามีคำถามเพิ่มเติมหรืออยากเริ่มใหม่ บอกได้เลยนะครับ",
             sender: "ai",
             role: "assistant",
             animate: true,
@@ -1088,9 +1243,7 @@ function App() {
       const wantsCreate = shouldCreateRecord(question, chatHistory, analysis);
       if (wantsCreate) {
         console.log("[FLOW] Create record intent detected");
-        setProcessingStep(
-          "\u0e01\u0e33\u0e25\u0e31\u0e07\u0e27\u0e34\u0e40\u0e04\u0e23\u0e32\u0e30\u0e2b\u0e4c\u0e02\u0e49\u0e2d\u0e21\u0e39\u0e25\u0e01\u0e32\u0e23\u0e40\u0e14\u0e34\u0e19\u0e17\u0e32\u0e07...",
-        );
+        setProcessingStep("กำลังวิเคราะห์ข้อมูลการเดินทาง...");
 
         // Use LLM extraction for accuracy; regex analysis is a fast fallback
         const llmAnalysis = await extractTripDataWithLLM(chatHistory);
@@ -1111,16 +1264,70 @@ function App() {
           startDate: isThai ? "วันเริ่มเดินทาง" : "departure date",
           endDate: isThai ? "วันสิ้นสุดการเดินทาง" : "return date",
           reimbursementType: isThai ? "ประเภทการเบิกเงิน" : "claim type",
-          extraField: isThai ? "ประเภทผู้เดินทาง" : "traveller role",
+          extraField: isThai
+            ? "ประเภทผู้เดินทาง"
+            : "traveller role (government rank)",
         };
 
         if (!finalAnalysis.isComplete) {
-          const missingLabeled = finalAnalysis.missing
-            .map((f) => fieldLabels[f] || f)
-            .join(", ");
+          // Dropdown options for fields that require a choice
+          const dropdownOptions = {
+            travelType:
+              "**ประเภทการเดินทาง** (กรุณาเลือก 1 ข้อ):\n  • ไปราชการในราชอาณาจักร\n  • ไปราชการต่างประเทศชั่วคราว\n  • ไปราชการประจำในต่างประเทศ",
+            countryType:
+              "**ประเทศ/ประเภทประเทศ** (กรุณาเลือก 1 ข้อ):\n  • ประเภท ก\n  • ประเภท ข\n  • Option 3\n  • ประเภท ค\n  • ประเภท ง\n  • ประเภท จ",
+            reimbursementType:
+              "**ประเภทการเบิกเงิน** (กรุณาเลือก 1 ข้อ):\n  • เหมาจ่าย\n  • จ่ายจริง\n  • Option 3",
+            extraField:
+              "**ประเภทผู้เดินทาง** (กรุณาเลือก 1 ข้อ):\n  • ข้าราชการ ก\n  • ข้าราชการ ข",
+          };
+          const dropdownOptionsEn = {
+            travelType:
+              "**Travel Type** (choose one):\n  • ไปราชการในราชอาณาจักร (Domestic)\n  • ไปราชการต่างประเทศชั่วคราว (Temporary overseas)\n  • ไปราชการประจำในต่างประเทศ (Permanent overseas)",
+            countryType:
+              "**Country Type** (choose one):\n  • ประเภท ก  • ประเภท ข  • Option 3  • ประเภท ค  • ประเภท ง  • ประเภท จ",
+            reimbursementType:
+              "**Claim Type** (choose one):\n  • เหมาจ่าย (Lump sum)  • จ่ายจริง (Actual cost)  • Option 3",
+            extraField:
+              "**Traveller Role** (choose one):\n  • ข้าราชการ ก\n  • ข้าราชการ ข",
+          };
+
+          const opts = isThai ? dropdownOptions : dropdownOptionsEn;
+          const missingDetails = finalAnalysis.missing
+            .map((f) => opts[f] || `**${fieldLabels[f] || f}**`)
+            .join("\n\n");
+
+          // Build "already collected" section
+          const allFields = [
+            "purpose",
+            "travelType",
+            "countryType",
+            "destination",
+            "startDate",
+            "endDate",
+            "reimbursementType",
+            "extraField",
+          ];
+          const missingSet = new Set(finalAnalysis.missing);
+          const collectedLines = allFields
+            .filter(
+              (f) => !missingSet.has(f) && finalAnalysis.extracted[f] != null,
+            )
+            .map(
+              (f) =>
+                `  ✅ **${fieldLabels[f] || f}:** ${finalAnalysis.extracted[f]}`,
+            );
+          const missingLines = finalAnalysis.missing.map(
+            (f) => `  ❓ **${fieldLabels[f] || f}**`,
+          );
+          const statusBlock = isThai
+            ? `**สรุปข้อมูลที่ได้รับ:**\n${[...collectedLines, ...missingLines].join("\n")}`
+            : `**Request data summary:**\n${[...collectedLines, ...missingLines].join("\n")}`;
+
           const askText = isThai
-            ? `\u0e40\u0e1e\u0e37\u0e48\u0e2d\u0e2a\u0e23\u0e49\u0e32\u0e07\u0e04\u0e33\u0e02\u0e2d\u0e40\u0e1a\u0e34\u0e01\u0e04\u0e48\u0e32\u0e43\u0e0a\u0e49\u0e08\u0e48\u0e32\u0e22 \u0e22\u0e31\u0e07\u0e02\u0e32\u0e14\u0e02\u0e49\u0e2d\u0e21\u0e39\u0e25\u0e40\u0e1e\u0e34\u0e48\u0e21\u0e40\u0e15\u0e34\u0e21\u0e14\u0e31\u0e07\u0e19\u0e35\u0e49\u0e04\u0e23\u0e31\u0e1a:\n\n**${missingLabeled}**\n\n\u0e01\u0e23\u0e38\u0e13\u0e32\u0e43\u0e2b\u0e49\u0e02\u0e49\u0e2d\u0e21\u0e39\u0e25\u0e40\u0e1e\u0e34\u0e48\u0e21\u0e40\u0e15\u0e34\u0e21\u0e40\u0e1e\u0e37\u0e48\u0e2d\u0e14\u0e33\u0e40\u0e19\u0e34\u0e19\u0e01\u0e32\u0e23\u0e15\u0e48\u0e2d\u0e44\u0e1b\u0e04\u0e23\u0e31\u0e1a`
-            : `To create the reimbursement request, I still need the following details:\n\n**${missingLabeled}**\n\nPlease provide them and I'll get the request ready for you.`;
+            ? `ขอบคุณสำหรับข้อมูลที่ให้มาครับ 😊\n\n${statusBlock}\n\n**ข้อมูลที่ยังขาด — กรุณาระบุหรือเลือกให้ครบครับ:**\n\n${missingDetails}`
+            : `Thank you! Here's the request summary so far:\n\n${statusBlock}\n\n**Missing fields — please fill in the following:**\n\n${missingDetails}`;
+
           return [
             {
               text: askText,
@@ -1133,15 +1340,13 @@ function App() {
         }
 
         // All required fields found — map to Nocoly fields and show summary for confirmation
-        setProcessingStep(
-          "\u0e01\u0e33\u0e25\u0e31\u0e07\u0e40\u0e15\u0e23\u0e35\u0e22\u0e21\u0e02\u0e49\u0e2d\u0e21\u0e39\u0e25\u0e04\u0e33\u0e02\u0e2d...",
-        );
+        setProcessingStep("กำลังเตรียมข้อมูลคำขอ...");
         const nocolyFields = mapToNocolyFields(finalAnalysis.extracted);
         if (!nocolyFields || nocolyFields.length === 0) {
           return [
             {
               text: isThai
-                ? "\u0e44\u0e21\u0e48\u0e2a\u0e32\u0e21\u0e32\u0e23\u0e16\u0e41\u0e21\u0e1b\u0e02\u0e49\u0e2d\u0e21\u0e39\u0e25\u0e44\u0e1b\u0e22\u0e31\u0e07\u0e1f\u0e34\u0e25\u0e14\u0e4c\u0e04\u0e33\u0e02\u0e2d\u0e44\u0e14\u0e49 \u0e01\u0e23\u0e38\u0e13\u0e32\u0e23\u0e30\u0e1a\u0e38\u0e23\u0e32\u0e22\u0e25\u0e30\u0e40\u0e2d\u0e35\u0e22\u0e14\u0e01\u0e32\u0e23\u0e40\u0e14\u0e34\u0e19\u0e17\u0e32\u0e07\u0e40\u0e1e\u0e34\u0e48\u0e21\u0e40\u0e15\u0e34\u0e21\u0e04\u0e23\u0e31\u0e1a"
+                ? "ไม่สามารถแมปข้อมูลไปยังฟิลด์คำขอได้ กรุณาระบุรายละเอียดการเดินทางเพิ่มเติมครับ"
                 : "Could not map the trip details to valid request fields. Please provide more information.",
               sender: "ai",
               role: "assistant",
@@ -1174,8 +1379,8 @@ function App() {
         pendingNocolyFieldsRef.current = nocolyFields;
 
         const confirmMsg = isThai
-          ? `\u0e1e\u0e1a\u0e02\u0e49\u0e2d\u0e21\u0e39\u0e25\u0e04\u0e23\u0e1a\u0e16\u0e49\u0e27\u0e19\u0e2a\u0e33\u0e2b\u0e23\u0e31\u0e1a\u0e2a\u0e23\u0e49\u0e32\u0e07\u0e04\u0e33\u0e02\u0e2d\u0e40\u0e1a\u0e34\u0e01\u0e04\u0e48\u0e32\u0e43\u0e0a\u0e49\u0e08\u0e48\u0e32\u0e22\u0e04\u0e23\u0e31\u0e1a \ud83d\udccb\n\n${summaryLines}\n\n**\u0e22\u0e37\u0e19\u0e22\u0e31\u0e19\u0e01\u0e32\u0e23\u0e2a\u0e48\u0e07\u0e04\u0e33\u0e02\u0e2d\u0e19\u0e35\u0e49\u0e44\u0e2b\u0e21\u0e04\u0e23\u0e31\u0e1a?**\n(\u0e1e\u0e34\u0e21\u0e1e\u0e4c "\u0e22\u0e37\u0e19\u0e22\u0e31\u0e19" \u0e40\u0e1e\u0e37\u0e48\u0e2d\u0e14\u0e33\u0e40\u0e19\u0e34\u0e19\u0e01\u0e32\u0e23 \u0e2b\u0e23\u0e37\u0e2d "\u0e22\u0e01\u0e40\u0e25\u0e34\u0e01" \u0e40\u0e1e\u0e37\u0e48\u0e2d\u0e22\u0e01\u0e40\u0e25\u0e34\u0e01)`
-          : `I have all the details ready for your reimbursement request \ud83d\udccb\n\n${summaryLines}\n\n**Would you like to submit this request?**\n(Type "confirm" to proceed, or "cancel" to cancel)`;
+          ? `พบข้อมูลครบถ้วนสำหรับสร้างคำขอเบิกค่าใช้จ่ายครับ 📋\n\n${summaryLines}\n\n**ยืนยันการส่งคำขอนี้ไหมครับ?**\n(พิมพ์ "ยืนยัน" เพื่อดำเนินการ หรือ "ยกเลิก" เพื่อยกเลิก)`
+          : `I have all the details ready for your reimbursement request 📋\n\n${summaryLines}\n\n**Would you like to submit this request?**\n(Type "confirm" to proceed, or "cancel" to cancel)`;
         return [
           {
             text: confirmMsg,
